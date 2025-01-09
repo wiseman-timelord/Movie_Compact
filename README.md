@@ -30,8 +30,10 @@ A program that generates condensed, action-packed summaries of gaming videos usi
    - Execute the main script to launch the Gradio interface.
    - Upload a gaming video and adjust the motion and texture thresholds.
    - Generate and download the condensed video summary.
+
 ## Notation
 - Mention any limitations or issues, such as the need for CUDA for better performance if we decide to add it later.
+- The program is named `Movie Consolidator`, because its intended to compliment `Movie Maker`, as `Movie Maker` has issues with >6 hour clips, however, my program intents to go beyond simple consolidation, to take advantage of what is possible.
 
 ## File Structure
 ```
