@@ -52,6 +52,7 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 ├── input\  # The user can input files into here for processing optionally.
 ├── data\temporary.py    # Stores user settings and thresholds.
 ├── data\persistent.json    # Stores user settings persistently.
+├── data\requirements.txt    # for correct install of python libraries.
 ```
 
 ## Development
