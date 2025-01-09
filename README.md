@@ -35,10 +35,10 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 
 ## File Structure
 ```
-./
+.\
 ├── README.md             # Project documentation
 ├── main_script.py        # Main program script
-├── scripts/
+├── scripts\
 │   ├── interface.py     # Gradio Interface
 │   ├── generate.py      # Video processing and summarization
 │   ├── utility.py       # Helper functions for analysis
@@ -47,11 +47,11 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 
 ## Files Created
 ```
-├── data/    # for data files
-├── output/               # Directory for generated summaries
-├── input/  # The user can input files into here for processing optionally.
-├── data/temporary.py    # Stores user settings and thresholds.
-├── data/persistent.json    # Stores user settings persistently.
+├── data\    # for data files
+├── output\              # Directory for generated summaries
+├── input\  # The user can input files into here for processing optionally.
+├── data\temporary.py    # Stores user settings and thresholds.
+├── data\persistent.json    # Stores user settings persistently.
 ```
 
 ## Development
