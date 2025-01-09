@@ -2,7 +2,7 @@
 Status: Alpha (early version)
 
 ## Description
-A program that generates condensed, action-packed summaries of gaming videos using motion and texture analysis. It provides a user-friendly Gradio interface to adjust parameters and view results.
+A program that generates condensed, action-packed summaries of gaming videos using motion and texture analysis. It provides a user-friendly Gradio interface to adjust parameters and view results, however, my program intents to go beyond simple consolidation of long videos, to taking advantage of what is possible to create great videos.
 
 ## Features
 - **Gradio Interface**: A web-based interface for interactive input and output.
@@ -33,7 +33,7 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 
 ## Notation
 - Mention any limitations or issues, such as the need for CUDA for better performance if we decide to add it later.
-- The program is named `Movie Consolidator`, because its intended to compliment `Movie Maker`, as `Movie Maker` has issues with >6 hour clips, however, my program intents to go beyond simple consolidation, to take advantage of what is possible.
+- The program is named `Movie Consolidator`, because its intended to compliment `Movie Maker`, as `Movie Maker` has issues with >6 hour clips.
 
 ## File Structure
 ```
