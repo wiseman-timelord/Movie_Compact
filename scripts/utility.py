@@ -1,7 +1,17 @@
 import cv2
 import numpy as np
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from data.temporary import SEARCH_CRITERIA
+import moviepy.editor as mp
 
+def get_video_duration(file_path):
+    clip = mp.VideoFileClip(file_path)
+    duration = clip.duration
+    clip.close()
+    return duration
+    
 def detect_motion(frame1, frame2, threshold=SEARCH_CRITERIA['motion_threshold']):
     gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)

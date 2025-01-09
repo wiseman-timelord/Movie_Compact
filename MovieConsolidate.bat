@@ -102,8 +102,8 @@ echo Listing installed packages...
 "%PYTHON_EXE_TO_USE%" -m pip list
 echo.
 
-echo Launching interface.py...
-"%PYTHON_EXE_TO_USE%" .\interface.py
+echo Launching scripts\interface.py...
+"%PYTHON_EXE_TO_USE%" .\scripts\interface.py
 pause
 goto exit
 

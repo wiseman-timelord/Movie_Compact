@@ -1,7 +1,23 @@
 import moviepy.editor as mp
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from scripts.utility import analyze_segment, extract_frames
 from data.temporary import SEARCH_CRITERIA
+import os
+import moviepy.editor as mp
+from utility import get_video_duration
 
+def process_videos(input_paths, output_path, output_length, output_quality):
+    summaries = []
+    total_duration = sum(get_video_duration(path) for path in input_paths)
+    for path in input_paths:
+        summary = generate_summary(path, (output_length * get_video_duration(path)) / total_duration)
+        summaries.append(summary)
+    final_clip = mp.concatenate_videoclips(summaries)
+    final_clip = final_clip.resize(output_quality['resolution'])
+    final_clip.write_videofile(output_path, bitrate=output_quality['bitrate'])
+    
 def process_video(input_path, output_path):
     video_clip = mp.VideoFileClip(input_path)
     highlights = []
