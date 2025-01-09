@@ -32,7 +32,6 @@ A program that generates condensed, action-packed summaries of gaming videos usi
    - Generate and download the condensed video summary.
 
 ## Notation
-- Mention any limitations or issues, such as the need for CUDA for better performance if we decide to add it later.
 - The program is named `Movie Consolidator`, because its intended to compliment `Movie Maker`, as `Movie Maker` has issues with >6 hour clips.
 
 ## File Structure
