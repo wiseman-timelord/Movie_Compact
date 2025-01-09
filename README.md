@@ -57,11 +57,6 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 ├── data\requirements.txt    # for correct install of python libraries.
 ```
 
-## Development
-- **Future plans**:
-  - Add support for real-time video summarization.
-  - Integrate additional features like audio analysis for better summary accuracy.
-
 ## Credits
 - **OpenCV**: For video processing functions.
 - **moviepy**: For video editing capabilities.
