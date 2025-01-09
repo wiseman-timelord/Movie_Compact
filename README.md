@@ -5,7 +5,7 @@ Status: Alpha (early version)
 ```
 the current objective for the program is processing to consolidate large clips into shorter more action packed clips...
 - cutting frames where the screen is actually paused, for example on a menu or message that popped up.
-- fast forwarding on sections of clips where very little changes for over a definable amount of time, for example 15 seconds.
+- fast forwarding on sections of clips where extremely little changes for over a definable amount of time, for example >15 seconds.
 - fast forwarding on menu access of any kind.
 - ensuring to include complete sections in real-time for action events, ie gunfire/violence detected.
 ...if we can do those things, it would be sweet. as a primary processing, and then after that, then...
