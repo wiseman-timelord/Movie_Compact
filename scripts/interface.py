@@ -1,3 +1,5 @@
+# .\scripts\interface.py
+
 import os
 import json
 import gradio as gr
@@ -5,6 +7,10 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 def load_persistent_settings():
+    """
+    Load persistent settings from persistent.json in the data directory.
+    If the file doesn't exist, return an empty dictionary.
+    """
     data_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), "data")
     persistent_file = os.path.join(data_dir, "persistent.json")
     if not os.path.exists(persistent_file):
@@ -13,14 +19,24 @@ def load_persistent_settings():
         return json.load(f)
 
 def save_persistent_settings(settings):
+    """
+    Save persistent settings to persistent.json in the data directory.
+    """
     data_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), "data")
     with open(os.path.join(data_dir, "persistent.json"), "w") as f:
         json.dump(settings, f, indent=4)
 
 def parse_folder_paths(folder_paths_str):
+    """
+    Parse semicolon-separated folder paths into a list of paths.
+    """
     return [path.strip() for path in folder_paths_str.split(';') if path.strip()]
 
 def list_video_files(folders):
+    """
+    List all video files in the specified folders.
+    Supported formats: .mp4, .avi, .mkv.
+    """
     video_extensions = ['.mp4', '.avi', '.mkv']
     video_files = []
     for folder in folders:
@@ -31,6 +47,9 @@ def list_video_files(folders):
     return video_files
 
 def display_video_info(video_files):
+    """
+    Display information about the video files, including filename and duration.
+    """
     display_list = []
     total_duration = 0
     for path in video_files:
@@ -43,13 +62,29 @@ def display_video_info(video_files):
     return display_list, total_duration, len(video_files)
 
 def get_video_duration(file_path):
+    """
+    Get the duration of a video file using moviepy.
+    """
     import moviepy.editor as mp
     clip = mp.VideoFileClip(file_path)
     duration = clip.duration
     clip.close()
     return duration
 
-def update_keys(new_motion_threshold=None, new_texture_threshold=None, new_audio_threshold=None, new_keywords=None, new_image_size=None, new_target_length=None, new_output_quality=None, new_processor_settings=None):
+def update_keys(
+    new_motion_threshold=None,
+    new_texture_threshold=None,
+    new_audio_threshold=None,
+    new_keywords=None,
+    new_image_size=None,
+    new_target_length=None,
+    new_output_quality=None,
+    new_use_gpu=None,
+    new_cpu_cores=None
+):
+    """
+    Update persistent settings with new values.
+    """
     settings = load_persistent_settings()
     if new_motion_threshold is not None:
         settings["motion_threshold"] = new_motion_threshold
@@ -65,12 +100,21 @@ def update_keys(new_motion_threshold=None, new_texture_threshold=None, new_audio
         settings["target_length"] = new_target_length
     if new_output_quality is not None:
         settings["output_quality"] = new_output_quality
-    if new_processor_settings is not None:
-        settings["processor_settings"] = new_processor_settings
+    if new_use_gpu is not None:
+        if "processor_settings" not in settings:
+            settings["processor_settings"] = {}
+        settings["processor_settings"]["use_gpu"] = new_use_gpu
+    if new_cpu_cores is not None:
+        if "processor_settings" not in settings:
+            settings["processor_settings"] = {}
+        settings["processor_settings"]["cpu_cores"] = new_cpu_cores
     save_persistent_settings(settings)
     return "Settings updated successfully!"
 
 def reset_settings():
+    """
+    Reset persistent settings to default values.
+    """
     default_settings = {
         "motion_threshold": 0.5,
         "texture_threshold": 0.6,
@@ -88,15 +132,22 @@ def reset_settings():
     return "Settings reset to default."
 
 def process_videos_interface(folder_paths_str, target_length, output_quality):
+    """
+    Process videos based on user input and generate a summary.
+    """
+    from scripts.generate import process_videos
     folders = parse_folder_paths(folder_paths_str)
     video_files = list_video_files(folders)
     if not video_files:
         return "No video files selected."
     output_path = 'output_summary.mp4'
-    # Processing logic here
+    process_videos(video_files, output_path, target_length, {"resolution": output_quality})
     return output_path
 
 def launch_gradio_interface():
+    """
+    Launch the Gradio interface for the MovieConsolidate application.
+    """
     settings = load_persistent_settings()
     
     with gr.Blocks() as interface:
@@ -112,6 +163,7 @@ def launch_gradio_interface():
                 output_quality_dropdown = gr.Dropdown(label="Output Quality", choices=["900p", "720p", "480p", "360p"], value=settings.get("output_quality", "720p"))
                 process_button = gr.Button("Process Videos")
                 output_video = gr.Video(label="Output Video")
+                exit_button = gr.Button("Exit Program")
                 
                 list_button.click(
                     fn=lambda x: "\n".join(display_video_info(list_video_files(parse_folder_paths(x)))[0]),
@@ -123,6 +175,12 @@ def launch_gradio_interface():
                     fn=process_videos_interface,
                     inputs=[folder_input, target_length_slider, output_quality_dropdown],
                     outputs=output_video
+                )
+                
+                exit_button.click(
+                    fn=lambda: os._exit(0),
+                    inputs=None,
+                    outputs=None
                 )
                 
             with gr.Tab("Configuration"):
@@ -142,7 +200,17 @@ def launch_gradio_interface():
                 
                 save_button.click(
                     fn=update_keys,
-                    inputs=[motion_threshold_slider, texture_threshold_slider, audio_threshold_slider, keywords_input, image_size_dropdown, target_length_slider, output_quality_dropdown, gr.JSON(use_gpu_checkbox, cpu_cores_slider)],
+                    inputs=[
+                        motion_threshold_slider,
+                        texture_threshold_slider,
+                        audio_threshold_slider,
+                        keywords_input,
+                        image_size_dropdown,
+                        target_length_slider,
+                        output_quality_dropdown,
+                        use_gpu_checkbox,
+                        cpu_cores_slider
+                    ],
                     outputs=gr.Textbox(label="Status")
                 )
                 

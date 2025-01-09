@@ -1,3 +1,5 @@
+# .\scripts\generate.py
+
 import moviepy.editor as mp
 import sys
 import os

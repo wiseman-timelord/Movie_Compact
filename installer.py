@@ -18,12 +18,11 @@ def create_persistent_json():
         "text_keywords": [],
         "image_size": "900p",
         "target_length": 5,
+        "output_quality": "720p",
         "processor_settings": {
             "use_gpu": True,
             "cpu_cores": 4,
-            # Add more processor/GPU settings as needed
         },
-        "output_quality": "720p",
         # Other settings as needed
     }
     persistent_file = os.path.join("data", "persistent.json")
@@ -48,6 +47,21 @@ def create_requirements_file():
                 f.write(f"{package}\n")
         print("Created requirements.txt in the data directory.")
 
+def create_temporary_py():
+    persistent_file = os.path.join("data", "persistent.json")
+    if os.path.exists(persistent_file):
+        with open(persistent_file, "r") as f:
+            settings = json.load(f)
+        search_criteria = {
+            "motion_threshold": settings.get("motion_threshold", 0.5),
+            "texture_threshold": settings.get("texture_threshold", 0.6),
+            # Add other criteria as needed
+        }
+        temporary_file = os.path.join("data", "temporary.py")
+        with open(temporary_file, "w") as f:
+            f.write(f"SEARCH_CRITERIA = {search_criteria}")
+        print("Created temporary.py with search criteria.")
+
 def install_requirements():
     req_file = os.path.join("data", "requirements.txt")
     print("Installing requirements...")
@@ -63,6 +77,7 @@ def main():
     ensure_data_directory()
     create_persistent_json()
     create_requirements_file()
+    create_temporary_py()
     install_requirements()
     print("Installation complete.")
 
