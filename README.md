@@ -20,7 +20,7 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 - **OpenCV library** for video processing
 - **moviepy** for video editing
 - **Gradio** for the web interface
-- **Operating system**: Windows, macOS, or Linux
+- **OS**: Windows, for Windows Gaming. 
 
 ## Usage
 1. **Installation**:
