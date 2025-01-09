@@ -4,16 +4,20 @@ Status: Alpha (early version)
 ### Plan...
 ```
 the current objective for the program is processing to consolidate large clips into shorter more action packed clips...
-- cutting frames where the screen is actually paused, for example on a menu or message that popped up.
-- fast forwarding on sections of clips where extremely little changes for over a definable amount of time, for example >10 seconds.
-- fast forwarding on menu access of any kind.
-- ensuring to include complete sections in real-time for action events, ie gunfire/violence detected.
-...if we can do those things, it would be sweet. as a primary processing, and then after that, then...
-1) output the new individual videos, as the above processing would be done for each video individually.
-2) after updated videos are outputted, then we need to know the new total length of all the videos selected.
-3) with the new length known, we would then  be having to detect sections within the videos where there are large sections where the contents is largely the same but there is some motion going on, and these sections would start at normal speed, then be incrementally speeded up to its mid-point, then incrementally slowed to normal speed, for the ending of the relevant "scene", before next section of footage, so as for time to be variable, enabling the remaining amount of footage, to be appropriately fitted-in optimally to the specified time period for the final video. this would be done individually for each video, and the videos will then again be individually outputted, now having optimal lengths, to fit together for within 15 mins for the specified time, either under or over, whatever fits best, thus having 30mins of give for the intended final video length, depending upon how it comes out.
-4) with all the videos outputted, the program would then produce the final video, where it has compiled ALL of the videos into one large video to the specified length.
-5) the purpose of the program is then complete, and the user may insert the consolidated section of video into movie maker, between some titles and an intro and credits, etc.
+1a) cutting frames where the screen is actually paused, for example on a menu or message that popped up.
+1b) fast forwarding on menu access of any kind.
+...if we can do those things, it would be sweet. as a primary processing, and the videos will then again be individually outputted,and then after that, then secondary processing...
+2a) fast forwarding on sections of clips where extremely little changes for over a definable amount of time, for example >10 seconds.
+2b) output the new individual videos, as the above processing would be done for each video individually.
+...if we can do those things, as secondary processing, and the videos will then again be individually outputted, and then after that, then tertiary processing...
+3a) after updated videos are outputted, then we need to know the new total length currently of all the videos selected, 
+3b) with the new length known, we would then  be having to detect sections within the videos where the contents is largely the same, and these sections would be "scenes".
+3c) The "scenes" are where we are going to squash down the time, start at normal speed at the start of a given scene, then be incrementally speeded up to its mid-point where it is at most highest speed, then incrementally slowed to normal speed, for the ending of the relevant "scene", before next scene of footage, so as for time to be variable, enabling large scenes to be dynamically compacted, to a degree, that are predicted to consolidated the final combined result, to the specified time period for the final video, however the calculation is best done, but, as are possible to do so, we need to also be ensuring to include complete sections in real-time for action scenes, ie gunfire/violence/explosions detected within scene.
+3d) the videos will then again be individually outputted, as the final versions of the videos.
+...if we can do those things, as secondary processing, and the videos will then again be individually outputted, and then after that, then fourth phase...
+4a) the final versions of the individual movie files, will then be merged in the correct alphabetic order, and the final video will be produced, that are hopefully something around the intended specified length for the video. Ideally having 30mins of give, more or less, around the indended final length would be acceptable for a 6 hour video consolidated from for example 12 hours, but however it ends up fitting best in relevance to the speeding up and down, we will have to fully theorise that part.
+4b) with the final video, where it has compiled ALL of the videos into one large video to the specified length, the purpose of the program is then complete,
+5) the user may insert the consolidated section of video into movie maker, between some titles and an intro and credits, etc, to produce their polished gaming video.
 ```
 
 
