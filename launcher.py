@@ -1,124 +1,140 @@
 # .\launcher.py
 
-import os
-import cv2
-import platform
-import cpuinfo
-import subprocess
-import sys
-import json
-import numpy as np
-import moviepy.editor as mp
-from moviepy.video.io.VideoFileClip import VideoFileClip
-from moviepy.video.compositing.concatenate import concatenate_videoclips
-from data.temporary import SEARCH_CRITERIA
-from utility import get_video_duration, load_hardware_config, detect_motion, process_video
-from generate import process_videos, process_video
+import os, sys, json
+from data.temporary import SEARCH_CRITERIA, VIDEO_CONFIG, HARDWARE_CONFIG
+from typing import Dict, Any
+from utility import (
+    load_hardware_config,
+    load_settings,
+    log_event,
+    cleanup_work_directory
+)
+from scripts.generate import process_videos, process_video
+from scripts.interface import launch_gradio_interface
 
-def detect_motion(frame1, frame2, threshold=SEARCH_CRITERIA['motion_threshold']):
-    """Detect motion between two frames."""
-    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-    diff = cv2.absdiff(gray1, gray2)
-    _, diff = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-    motion_score = np.mean(diff) / 255.0
-    return motion_score > threshold
+class MovieConsolidator:
+    def __init__(self):
+        self.settings = load_settings()
+        self.hardware_config = load_hardware_config()
+        self.search_criteria = self.settings.get('search', {})
+        self.video_config = self.settings.get('video', {})
+        self.validate_environment()
 
-def detect_texture_change(frame1, frame2, threshold=SEARCH_CRITERIA['texture_threshold']):
-    """Detect texture change between two frames."""
-    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-    hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
-    hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
-    texture_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-    return texture_score > threshold
+    def validate_environment(self) -> None:
+        """Validate the program environment."""
+        try:
+            required_dirs = ['data', 'input', 'output', 'work']
+            for dir_name in required_dirs:
+                if not os.path.exists(dir_name):
+                    os.makedirs(dir_name)
+                    log_event(f"Created missing directory: {dir_name}")
 
-def analyze_segment(frame1, frame2):
-    """Analyze segment for motion or texture changes."""
-    motion = detect_motion(frame1, frame2)
-    texture = detect_texture_change(frame1, frame2)
-    return motion or texture
+            required_files = [
+                os.path.join('data', 'temporary.py'),
+                os.path.join('data', 'persistent.json'),
+                os.path.join('data', 'hardware.txt')
+            ]
+            
+            for file_path in required_files:
+                if not os.path.exists(file_path):
+                    log_event(f"Error: Required file missing: {file_path}")
+                    raise FileNotFoundError(f"Required file missing: {file_path}")
+                    
+        except Exception as e:
+            log_event(f"Environment validation failed: {e}")
+            sys.exit(1)
 
-def extract_frames(video_path, frame_rate=30):
-    """Extract frames from video at a specified frame rate."""
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(frame)
-    cap.release()
-    return frames
+    def print_hardware_info(self) -> None:
+        """Display hardware configuration."""
+        print("\nHardware Configuration:")
+        for key, value in self.hardware_config.items():
+            print(f"{key}: {value}")
+        
+        if self.hardware_config["OpenCL"]:
+            print("Using OpenCL for GPU acceleration")
+        elif self.hardware_config["Avx2"]:
+            print("Using AVX2 for CPU acceleration")
+        else:
+            print("Using standard CPU processing")
 
-def process_video(input_path, output_path):
-    """Process video and generate summary."""
-    frames = extract_frames(input_path)
-    highlights = []
-    video_clip = VideoFileClip(input_path)
-    for i in range(1, len(frames)):
-        if analyze_segment(frames[i - 1], frames[i]):
-            start_time = i / video_clip.fps
-            end_time = (i + 1) / video_clip.fps
-            highlight = video_clip.subclip(start_time, end_time)
-            highlights.append(highlight)
-    if highlights:
-        final_clip = concatenate_videoclips(highlights)
-        final_clip.write_videofile(output_path, codec='libx264')
-    else:
-        print("No highlights detected.")
+    def process_directory(self, input_dir: str, output_dir: str) -> None:
+        """Process all videos in a directory."""
+        try:
+            if not os.path.exists(input_dir):
+                raise FileNotFoundError(f"Input directory not found: {input_dir}")
+                
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                
+            log_event(f"Starting batch processing: {input_dir} -> {output_dir}")
+            process_videos(input_dir, output_dir)
+            
+        except Exception as e:
+            log_event(f"Directory processing failed: {e}")
+            cleanup_work_directory()
+
+    def process_single_file(self, input_path: str, output_path: str) -> None:
+        """Process a single video file."""
+        try:
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"Input file not found: {input_path}")
+                
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                
+            log_event(f"Processing single file: {input_path} -> {output_path}")
+            process_video(input_path, output_path)
+            
+        except Exception as e:
+            log_event(f"Single file processing failed: {e}")
+            cleanup_work_directory()
 
 def main():
-    # Load persistent settings
-    settings = load_persistent_settings()
-    input_path = settings.get("input_path", "input")
-    output_path = settings.get("output_path", "output")
-
-    # Load and print hardware configuration
-    hardware_config = load_hardware_config()
-    print("Hardware Configuration:")
-    for key, value in hardware_config.items():
-        print(f"{key}: {value}")
-
-    # Select optimal processing method
-    if hardware_config["OpenCL"]:
-        print("Using OpenCL for GPU acceleration.")
-    elif hardware_config["Avx2"]:
-        print("Using AVX2 for CPU acceleration.")
-    else:
-        print("Using x64 for CPU processing.")
-
-    # Check if input_path is a directory or a single file
-    if os.path.isdir(input_path):
-        # Process all videos in the input directory
-        if not os.path.exists(input_path):
-            print(f"Error: Input directory not found at {input_path}.")
-            return
-
-        # Ensure output_path exists
-        if not os.path.exists(output_path):
-            os.makedirs(output_path)
-
-        print("Starting video summarization for all videos in the directory...")
-        process_videos(input_path, output_path)
-        print("Video summarization complete.")
-    elif os.path.isfile(input_path):
-        # Process a single video file
-        if not os.path.exists(input_path):
-            print(f"Error: Input video file not found at {input_path}.")
-            return
-
-        # Ensure output directory exists
-        output_dir = os.path.dirname(output_path)
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        print("Starting video summarization for the single file...")
-        process_video(input_path, output_path)
-        print(f"Video summary saved to {output_path}.")
-    else:
-        print(f"Error: Input path {input_path} is neither a directory nor a file.")
-        return
+    """Main entry point for the program."""
+    try:
+        # Initialize the consolidator
+        consolidator = MovieConsolidator()
+        consolidator.print_hardware_info()
+        
+        # Load settings
+        settings = load_settings()
+        
+        # Determine if we're using GUI or command line
+        if len(sys.argv) > 1:
+            # Command line mode
+            if sys.argv[1] == "--gui":
+                launch_gradio_interface()
+            elif len(sys.argv) == 3:
+                # Process single directory
+                input_dir = sys.argv[1]
+                output_dir = sys.argv[2]
+                consolidator.process_directory(input_dir, output_dir)
+            elif len(sys.argv) == 4 and sys.argv[1] == "--file":
+                # Process single file
+                input_path = sys.argv[2]
+                output_path = sys.argv[3]
+                consolidator.process_single_file(input_path, output_path)
+            else:
+                print("\nUsage:")
+                print("  Launch GUI:")
+                print("    python launcher.py --gui")
+                print("  Process directory:")
+                print("    python launcher.py input_dir output_dir")
+                print("  Process single file:")
+                print("    python launcher.py --file input_path output_path")
+        else:
+            # Default to GUI mode
+            launch_gradio_interface()
+            
+    except Exception as e:
+        log_event(f"Program execution failed: {e}")
+        print(f"Error: {e}")
+        cleanup_work_directory()
+        sys.exit(1)
+        
+    finally:
+        cleanup_work_directory()
 
 if __name__ == "__main__":
     main()

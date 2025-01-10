@@ -1,206 +1,391 @@
 # .\scripts\interface.py
 
-import os
-import json
-import gradio as gr
-import sys
-from utility import get_video_duration, load_hardware_config
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# .\scripts\interface.py
 
-def load_hardware_config():
-    hardware_file = os.path.join("data", "hardware.txt")
-    hardware_config = {
-        "x64": False,
-        "Avx2": False,
-        "Aocl": False,
-        "OpenCL": False,
-    }
-    if os.path.exists(hardware_file):
-        with open(hardware_file, "r") as f:
-            for line in f:
-                key, value = line.strip().split(": ")
-                hardware_config[key] = value.lower() == "true"
-    return hardware_config
+import os, json, gradio as gr, sys
+from typing import Dict, List, Tuple, Any, Optional
+from utility import (
+    load_hardware_config,
+    load_settings,
+    get_video_files,
+    get_video_duration,
+    log_event
+)
+from scripts.generate import process_videos, process_video
 
+class GradioInterface:
+    def __init__(self):
+        self.settings = load_settings()
+        self.hardware_config = load_hardware_config()
+        self.search_criteria = self.settings.get('search', {})
+        self.video_config = self.settings.get('video', {})
 
-def load_persistent_settings():
-    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
-    persistent_file = os.path.join(data_dir, "persistent.json")
-    if not os.path.exists(persistent_file):
-        return {}
-    with open(persistent_file, "r") as f:
-        return json.load(f)
+    def load_persistent_settings(self) -> Dict[str, Any]:
+        """Load settings from persistent.json."""
+        try:
+            persistent_file = os.path.join("data", "persistent.json")
+            if os.path.exists(persistent_file):
+                with open(persistent_file, "r") as f:
+                    return json.load(f)
+            return {}
+        except Exception as e:
+            log_event(f"Error loading persistent settings: {e}")
+            return {}
 
-def save_persistent_settings(settings):
-    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
-    with open(os.path.join(data_dir, "persistent.json"), "w") as f:
-        json.dump(settings, f, indent=4)
+    def save_persistent_settings(self, settings: Dict[str, Any]) -> None:
+        """Save settings to persistent.json."""
+        try:
+            persistent_file = os.path.join("data", "persistent.json")
+            with open(persistent_file, "w") as f:
+                json.dump(settings, f, indent=4)
+            log_event("Settings saved successfully")
+        except Exception as e:
+            log_event(f"Error saving settings: {e}")
 
-def parse_folder_paths(folder_paths_str):
-    """
-    Parse semicolon-separated folder paths into a list of paths.
-    """
-    return [path.strip() for path in folder_paths_str.split(';') if path.strip()]
+    def update_event_log(self) -> str:
+        """Read and return the event log content."""
+        try:
+            log_file = os.path.join("data", "events.txt")
+            if os.path.exists(log_file):
+                with open(log_file, "r") as f:
+                    lines = f.readlines()
+                    # Return last 20 lines for display
+                    return "".join(lines[-20:])
+            return "No events logged yet."
+        except Exception as e:
+            return f"Error reading event log: {e}"
 
-def list_video_files(folders):
-    """
-    List all video files in the specified folders.
-    Supported formats: .mp4, .avi, .mkv.
-    """
-    video_extensions = ['.mp4', '.avi', '.mkv']
-    video_files = []
-    for folder in folders:
-        for root, _, files in os.walk(folder):
-            for file in files:
-                if os.path.splitext(file)[1].lower() in video_extensions:
-                    video_files.append(os.path.join(root, file))
-    return video_files
+    def parse_folder_paths(self, folder_paths_str: str) -> List[str]:
+        """Parse semicolon-separated folder paths."""
+        return [path.strip() for path in folder_paths_str.split(';') if path.strip()]
 
-def display_video_info(video_files):
-    video_extensions = ['.mp4', '.avi', '.mkv']
-    display_list = []
-    total_duration = 0
-    for path in video_files:
-        filename = os.path.basename(path)
-        if len(filename) > 14:
-            filename = filename[:11] + '...'
-        duration = get_video_duration(path)
-        display_list.append(f"{filename} - {duration:.2f} seconds")
-        total_duration += duration
-    return display_list, total_duration, len(video_files)
+    def list_video_files(self, folders: List[str]) -> List[Dict[str, Any]]:
+        """List video files with metadata."""
+        video_files = []
+        supported_formats = self.video_config.get('supported_formats', ['.mp4', '.avi', '.mkv'])
+        
+        try:
+            for folder in folders:
+                if not os.path.exists(folder):
+                    log_event(f"Folder not found: {folder}")
+                    continue
+                    
+                for root, _, files in os.walk(folder):
+                    for file in files:
+                        if os.path.splitext(file)[1].lower() in supported_formats:
+                            full_path = os.path.join(root, file)
+                            duration = get_video_duration(full_path)
+                            video_files.append({
+                                'path': full_path,
+                                'name': file,
+                                'duration': duration,
+                                'size': os.path.getsize(full_path)
+                            })
+            
+            log_event(f"Found {len(video_files)} video files")
+            return video_files
+            
+        except Exception as e:
+            log_event(f"Error listing video files: {e}")
+            return []
 
-def get_video_duration(file_path):
-    """
-    Get the duration of a video file using moviepy.
-    """
-    import moviepy.editor as mp
-    clip = mp.VideoFileClip(file_path)
-    duration = clip.duration
-    clip.close()
-    return duration
+    def format_video_list(self, videos: List[Dict[str, Any]]) -> Tuple[str, float, int]:
+        """Format video list for display."""
+        display_list = []
+        total_duration = 0
+        
+        for video in videos:
+            name = video['name']
+            if len(name) > 40:
+                name = name[:37] + "..."
+            duration = video['duration']
+            size_mb = video['size'] / (1024 * 1024)
+            
+            display_list.append(f"{name} - {duration:.1f}s - {size_mb:.1f}MB")
+            total_duration += duration
+            
+        return "\n".join(display_list), total_duration, len(videos)
 
-def update_keys(
-    new_motion_threshold=None,
-    new_texture_threshold=None,
-    new_audio_threshold=None,
-    new_keywords=None,
-    new_image_size=None,
-    new_target_length=None,
-    new_output_quality=None,
-    new_use_gpu=None,  # Add OpenCL toggle
-    new_cpu_cores=None
-):
-    settings = load_persistent_settings()
-    if new_use_gpu is not None:
-        settings["processor_settings"]["use_gpu"] = new_use_gpu
-    save_persistent_settings(settings)
-    return "Settings updated successfully!"
-
-def reset_settings():
-    """
-    Reset persistent settings to default values.
-    """
-    default_settings = {
-        "motion_threshold": 0.5,
-        "texture_threshold": 0.6,
-        "audio_threshold": 0.7,
-        "text_keywords": [],
-        "image_size": "900p",
-        "target_length": 5,
-        "output_quality": "720p",
-        "processor_settings": {
-            "use_gpu": True,
-            "cpu_cores": 4
-        }
-    }
-    save_persistent_settings(default_settings)
-    return "Settings reset to default."
-
-def process_videos_interface(folder_paths_str, target_length, output_quality):
-    """
-    Process videos based on user input and generate a summary.
-    """
-    from scripts.generate import process_videos
-    folders = parse_folder_paths(folder_paths_str)
-    video_files = list_video_files(folders)
-    if not video_files:
-        return "No video files selected."
-    output_path = 'output_summary.mp4'
-    process_videos(video_files, output_path, target_length, {"resolution": output_quality})
-    return output_path
-
-def launch_gradio_interface():
-    settings = load_persistent_settings()
-    input_path = settings.get("input_path", "input")
-    output_path = settings.get("output_path", "output")
-    with gr.Blocks() as interface:
-        with gr.Tabs():
-            with gr.Tab("Consolidation"):
-                gr.Markdown("# Video Summarization Interface")
-                folder_input = gr.Textbox(label="Folder Paths (semicolon-separated)", placeholder="Enter folder paths here")
-                list_button = gr.Button("List Videos")
-                video_list = gr.Textbox(label="Selected Videos", interactive=False)
-                total_time = gr.Textbox(label="Total Unprocessed Time", interactive=False)
-                source_videos = gr.Textbox(label="Number of Source Videos", interactive=False)
-                process_button = gr.Button("Process Videos")
-                output_video = gr.Video(label="Output Video")
-                exit_button = gr.Button("Exit Program")
+    def process_videos_interface(self, folder_paths_str: str) -> str:
+        """Process videos from interface."""
+        try:
+            folders = self.parse_folder_paths(folder_paths_str)
+            if not folders:
+                return "No folders specified."
                 
+            log_event("Starting video processing from interface")
+            settings = self.load_persistent_settings()
+            output_dir = settings.get("paths", {}).get("output_path", "output")
+            
+            # Process each folder
+            for folder in folders:
+                if not os.path.exists(folder):
+                    log_event(f"Folder not found: {folder}")
+                    continue
+                    
+                process_videos(folder, output_dir)
+            
+            return f"Processing complete. Results saved to {output_dir}"
+            
+        except Exception as e:
+            error_msg = f"Processing failed: {e}"
+            log_event(error_msg)
+            return error_msg
+
+    def launch_interface(self):
+        """Launch the Gradio interface."""
+        settings = self.load_persistent_settings()
+        
+        with gr.Blocks(title="Movie Consolidator") as interface:
+            with gr.Tabs():
+                # Consolidation Tab
+                with gr.Tab("Consolidation"):
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            gr.Markdown("# Video Consolidation")
+                            
+                            # Input Section
+                            with gr.Group():
+                                folder_input = gr.Textbox(
+                                    label="Input Folders (semicolon-separated)",
+                                    placeholder="Enter folder paths here"
+                                )
+                                list_button = gr.Button("List Videos")
+                                video_list = gr.Textbox(label="Selected Videos", interactive=False)
+                                total_duration = gr.Number(label="Total Duration (seconds)", interactive=False)
+                                file_count = gr.Number(label="Number of Files", interactive=False)
+                            
+                            # Process Section
+                            with gr.Group():
+                                process_button = gr.Button("Process Videos", variant="primary")
+                                current_phase = gr.Textbox(label="Current Phase", interactive=False)
+                                progress_bar = gr.Progress()
+                                status_output = gr.Textbox(label="Status", interactive=False)
+
+                        # Event Log Column
+                        with gr.Column(scale=1):
+                            event_log = gr.Textbox(
+                                label="Processing Log",
+                                value=self.update_event_log(),
+                                interactive=False,
+                                max_lines=20,
+                                autoscroll=True
+                            )
+                            refresh_log = gr.Button("Refresh Log")
+                
+                # Configuration Tab
+                with gr.Tab("Configuration"):
+                    gr.Markdown("# Settings")
+                    
+                    with gr.Row():
+                        # Hardware Info
+                        with gr.Column():
+                            hardware_info = gr.JSON(
+                                label="Hardware Features",
+                                value=self.hardware_config
+                            )
+                        
+                        # Video Settings
+                        with gr.Column():
+                            target_length = gr.Number(
+                                label="Target Length (minutes)",
+                                value=settings.get("video_settings", {}).get("target_length", 30)
+                            )
+                            preview_height = gr.Slider(
+                                label="Preview Height",
+                                minimum=240,
+                                maximum=720,
+                                step=120,
+                                value=settings.get("video_settings", {}).get("preview_height", 360)
+                            )
+
+                    with gr.Row():
+                        # Detection Settings
+                        with gr.Column():
+                            gr.Markdown("### Detection Settings")
+                            motion_threshold = gr.Slider(
+                                label="Motion Threshold",
+                                minimum=0,
+                                maximum=1,
+                                step=0.1,
+                                value=settings.get("motion_threshold", 0.5)
+                            )
+                            texture_threshold = gr.Slider(
+                                label="Texture Threshold",
+                                minimum=0,
+                                maximum=1,
+                                step=0.1,
+                                value=settings.get("texture_threshold", 0.6)
+                            )
+                            static_threshold = gr.Slider(
+                                label="Static Frame Threshold",
+                                minimum=0.9,
+                                maximum=1.0,
+                                step=0.01,
+                                value=settings.get("static_threshold", 0.99)
+                            )
+
+                        # Scene Settings
+                        with gr.Column():
+                            gr.Markdown("### Scene Settings")
+                            min_scene_length = gr.Number(
+                                label="Minimum Scene Length (seconds)",
+                                value=settings.get("scene_settings", {}).get("min_scene_length", 2)
+                            )
+                            max_scene_length = gr.Number(
+                                label="Maximum Scene Length (seconds)",
+                                value=settings.get("scene_settings", {}).get("max_scene_length", 300)
+                            )
+                            scene_threshold = gr.Slider(
+                                label="Scene Change Threshold",
+                                minimum=10,
+                                maximum=100,
+                                step=5,
+                                value=settings.get("scene_settings", {}).get("scene_threshold", 30)
+                            )
+
+                    with gr.Row():
+                        # Processing Settings
+                        with gr.Column():
+                            gr.Markdown("### Processing Settings")
+                            use_gpu = gr.Checkbox(
+                                label="Use GPU Acceleration",
+                                value=settings.get("processor_settings", {}).get("use_gpu", True)
+                            )
+                            cpu_cores = gr.Slider(
+                                label="CPU Threads",
+                                minimum=1,
+                                maximum=16,
+                                step=1,
+                                value=settings.get("processor_settings", {}).get("cpu_cores", 4)
+                            )
+                            batch_size = gr.Slider(
+                                label="GPU Batch Size",
+                                minimum=16,
+                                maximum=128,
+                                step=16,
+                                value=settings.get("processor_settings", {}).get("gpu_batch_size", 32)
+                            )
+                        
+                        # Speed Settings
+                        with gr.Column():
+                            gr.Markdown("### Speed Settings")
+                            max_speed = gr.Slider(
+                                label="Maximum Speed Factor",
+                                minimum=1.0,
+                                maximum=8.0,
+                                step=0.5,
+                                value=settings.get("speed_settings", {}).get("max_speed_factor", 4.0)
+                            )
+                            transition_frames = gr.Slider(
+                                label="Speed Transition Frames",
+                                minimum=10,
+                                maximum=60,
+                                step=5,
+                                value=settings.get("speed_settings", {}).get("transition_frames", 30)
+                            )
+
+                    # Save/Reset Buttons
+                    with gr.Row():
+                        save_button = gr.Button("Save Settings", variant="primary")
+                        reset_button = gr.Button("Reset to Default")
+                
+                # Event handlers
                 list_button.click(
-                    fn=lambda x: "\n".join(display_video_info([x])[0]),
-                    inputs=folder_input,
-                    outputs=video_list
+                    fn=lambda x: self.format_video_list(self.list_video_files(self.parse_folder_paths(x))),
+                    inputs=[folder_input],
+                    outputs=[video_list, total_duration, file_count]
                 )
                 
                 process_button.click(
-                    fn=lambda: "Processing started...",
-                    inputs=None,
-                    outputs=output_video
+                    fn=self.process_videos_interface,
+                    inputs=[folder_input],
+                    outputs=[status_output]
+                )
+
+                refresh_log.click(
+                    fn=self.update_event_log,
+                    outputs=[event_log]
                 )
                 
-                exit_button.click(
-                    fn=lambda: os._exit(0),
-                    inputs=None,
-                    outputs=None
-                )
-                
-            with gr.Tab("Configuration"):
-                gr.Markdown("# Configuration Settings")
-                input_folder = gr.Folder(label="Input Folder", value=input_path)
-                output_folder = gr.Folder(label="Output Folder", value=output_path)
-                save_button = gr.Button("Save Configuration")
-                with gr.Row():
-                    with gr.Column():
-                    hardware_info = gr.Textbox(
-                        label="Hardware Features",
-                        value=load_hardware_config(),
-                        interactive=False,
-                    )
-                    with gr.Column():
-                        motion_threshold_slider = gr.Slider(label="Motion Threshold", minimum=0, maximum=1, step=0.1, value=settings.get("motion_threshold", 0.5))
-                        texture_threshold_slider = gr.Slider(label="Texture Threshold", minimum=0, maximum=1, step=0.1, value=settings.get("texture_threshold", 0.6))
-                        audio_threshold_slider = gr.Slider(label="Audio Threshold", minimum=0, maximum=1, step=0.1, value=settings.get("audio_threshold", 0.7))
-                        keywords_input = gr.Textbox(label="Keywords (comma-separated)", value=",".join(settings.get("text_keywords", [])))
-                        image_size_dropdown = gr.Dropdown(label="Image Size", choices=["900p", "720p", "480p", "360p"], value=settings.get("image_size", "900p"))
-                        use_gpu_checkbox = gr.Checkbox(label="Use GPU", value=settings.get("processor_settings", {}).get("use_gpu", True))
-                        cpu_cores_slider = gr.Slider(label="CPU Cores", minimum=1, maximum=16, step=1, value=settings.get("processor_settings", {}).get("cpu_cores", 4))
-                    with gr.Column():
-                        reset_button = gr.Button("Reset to Default", variant="secondary")
-                        save_button = gr.Button("Save Configuration", variant="primary")
-                
+                # Save all settings
                 save_button.click(
-                    fn=lambda x, y: save_persistent_settings({"input_path": x, "output_path": y}),
-                    inputs=[input_folder, output_folder],
-                    outputs=None
+                    fn=lambda *args: self.save_persistent_settings({
+                        "video_settings": {
+                            "target_length": args[0],
+                            "preview_height": args[1]
+                        },
+                        "motion_threshold": args[2],
+                        "texture_threshold": args[3],
+                        "static_threshold": args[4],
+                        "scene_settings": {
+                            "min_scene_length": args[5],
+                            "max_scene_length": args[6],
+                            "scene_threshold": args[7]
+                        },
+                        "processor_settings": {
+                            "use_gpu": args[8],
+                            "cpu_cores": args[9],
+                            "gpu_batch_size": args[10]
+                        },
+                        "speed_settings": {
+                            "max_speed_factor": args[11],
+                            "transition_frames": args[12]
+                        }
+                    }),
+                    inputs=[
+                        target_length, preview_height,
+                        motion_threshold, texture_threshold, static_threshold,
+                        min_scene_length, max_scene_length, scene_threshold,
+                        use_gpu, cpu_cores, batch_size,
+                        max_speed, transition_frames
+                    ]
                 )
                 
+                # Reset to defaults
                 reset_button.click(
-                    fn=lambda: save_persistent_settings({}),
-                    inputs=None,
-                    outputs=None
+                    fn=lambda: {
+                        "video_settings": {
+                            "target_length": 30,
+                            "preview_height": 360
+                        },
+                        "motion_threshold": 0.5,
+                        "texture_threshold": 0.6,
+                        "static_threshold": 0.99,
+                        "scene_settings": {
+                            "min_scene_length": 2,
+                            "max_scene_length": 300,
+                            "scene_threshold": 30
+                        },
+                        "processor_settings": {
+                            "use_gpu": True,
+                            "cpu_cores": 4,
+                            "gpu_batch_size": 32
+                        },
+                        "speed_settings": {
+                            "max_speed_factor": 4.0,
+                            "transition_frames": 30
+                        }
+                    },
+                    outputs=[
+                        target_length, preview_height,
+                        motion_threshold, texture_threshold, static_threshold,
+                        min_scene_length, max_scene_length, scene_threshold,
+                        use_gpu, cpu_cores, batch_size,
+                        max_speed, transition_frames
+                    ]
                 )
-                
-        interface.launch(inbrowser=True)
+            
+            # Auto-refresh event log every 5 seconds
+            gr.on(lambda: gr.Timer(5), self.update_event_log, outputs=[event_log])
+            
+            # Launch in browser
+            interface.launch(inbrowser=True)
+
+def launch_gradio_interface():
+    """Launch the Gradio interface."""
+    interface = GradioInterface()
+    interface.launch_interface()
 
 if __name__ == "__main__":
     launch_gradio_interface()
