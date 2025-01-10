@@ -1,4 +1,4 @@
-# Movie Consolidator
+# Movie-Consolidator
 Status: Alpha (early version)
 
 ### Plan...
