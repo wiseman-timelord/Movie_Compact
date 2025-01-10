@@ -4,14 +4,27 @@ import os
 import json
 import gradio as gr
 import sys
+from utility import get_video_duration, load_hardware_config
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+def load_hardware_config():
+    hardware_file = os.path.join("data", "hardware.txt")
+    hardware_config = {
+        "x64": False,
+        "Avx2": False,
+        "Aocl": False,
+        "OpenCL": False,
+    }
+    if os.path.exists(hardware_file):
+        with open(hardware_file, "r") as f:
+            for line in f:
+                key, value = line.strip().split(": ")
+                hardware_config[key] = value.lower() == "true"
+    return hardware_config
+
+
 def load_persistent_settings():
-    """
-    Load persistent settings from persistent.json in the data directory.
-    If the file doesn't exist, return an empty dictionary.
-    """
-    data_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), "data")
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
     persistent_file = os.path.join(data_dir, "persistent.json")
     if not os.path.exists(persistent_file):
         return {}
@@ -19,10 +32,7 @@ def load_persistent_settings():
         return json.load(f)
 
 def save_persistent_settings(settings):
-    """
-    Save persistent settings to persistent.json in the data directory.
-    """
-    data_dir = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), "data")
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
     with open(os.path.join(data_dir, "persistent.json"), "w") as f:
         json.dump(settings, f, indent=4)
 
@@ -47,9 +57,7 @@ def list_video_files(folders):
     return video_files
 
 def display_video_info(video_files):
-    """
-    Display information about the video files, including filename and duration.
-    """
+    video_extensions = ['.mp4', '.avi', '.mkv']
     display_list = []
     total_duration = 0
     for path in video_files:
@@ -79,35 +87,12 @@ def update_keys(
     new_image_size=None,
     new_target_length=None,
     new_output_quality=None,
-    new_use_gpu=None,
+    new_use_gpu=None,  # Add OpenCL toggle
     new_cpu_cores=None
 ):
-    """
-    Update persistent settings with new values.
-    """
     settings = load_persistent_settings()
-    if new_motion_threshold is not None:
-        settings["motion_threshold"] = new_motion_threshold
-    if new_texture_threshold is not None:
-        settings["texture_threshold"] = new_texture_threshold
-    if new_audio_threshold is not None:
-        settings["audio_threshold"] = new_audio_threshold
-    if new_keywords is not None:
-        settings["text_keywords"] = new_keywords.split(",")
-    if new_image_size is not None:
-        settings["image_size"] = new_image_size
-    if new_target_length is not None:
-        settings["target_length"] = new_target_length
-    if new_output_quality is not None:
-        settings["output_quality"] = new_output_quality
     if new_use_gpu is not None:
-        if "processor_settings" not in settings:
-            settings["processor_settings"] = {}
         settings["processor_settings"]["use_gpu"] = new_use_gpu
-    if new_cpu_cores is not None:
-        if "processor_settings" not in settings:
-            settings["processor_settings"] = {}
-        settings["processor_settings"]["cpu_cores"] = new_cpu_cores
     save_persistent_settings(settings)
     return "Settings updated successfully!"
 
@@ -145,11 +130,9 @@ def process_videos_interface(folder_paths_str, target_length, output_quality):
     return output_path
 
 def launch_gradio_interface():
-    """
-    Launch the Gradio interface for the MovieConsolidate application.
-    """
     settings = load_persistent_settings()
-    
+    input_path = settings.get("input_path", "input")
+    output_path = settings.get("output_path", "output")
     with gr.Blocks() as interface:
         with gr.Tabs():
             with gr.Tab("Consolidation"):
@@ -159,21 +142,19 @@ def launch_gradio_interface():
                 video_list = gr.Textbox(label="Selected Videos", interactive=False)
                 total_time = gr.Textbox(label="Total Unprocessed Time", interactive=False)
                 source_videos = gr.Textbox(label="Number of Source Videos", interactive=False)
-                target_length_slider = gr.Slider(label="Target Length (minutes)", minimum=1, maximum=10, step=1, value=settings.get("target_length", 5))
-                output_quality_dropdown = gr.Dropdown(label="Output Quality", choices=["900p", "720p", "480p", "360p"], value=settings.get("output_quality", "720p"))
                 process_button = gr.Button("Process Videos")
                 output_video = gr.Video(label="Output Video")
                 exit_button = gr.Button("Exit Program")
                 
                 list_button.click(
-                    fn=lambda x: "\n".join(display_video_info(list_video_files(parse_folder_paths(x)))[0]),
+                    fn=lambda x: "\n".join(display_video_info([x])[0]),
                     inputs=folder_input,
                     outputs=video_list
                 )
                 
                 process_button.click(
-                    fn=process_videos_interface,
-                    inputs=[folder_input, target_length_slider, output_quality_dropdown],
+                    fn=lambda: "Processing started...",
+                    inputs=None,
                     outputs=output_video
                 )
                 
@@ -185,7 +166,16 @@ def launch_gradio_interface():
                 
             with gr.Tab("Configuration"):
                 gr.Markdown("# Configuration Settings")
+                input_folder = gr.Folder(label="Input Folder", value=input_path)
+                output_folder = gr.Folder(label="Output Folder", value=output_path)
+                save_button = gr.Button("Save Configuration")
                 with gr.Row():
+                    with gr.Column():
+                    hardware_info = gr.Textbox(
+                        label="Hardware Features",
+                        value=load_hardware_config(),
+                        interactive=False,
+                    )
                     with gr.Column():
                         motion_threshold_slider = gr.Slider(label="Motion Threshold", minimum=0, maximum=1, step=0.1, value=settings.get("motion_threshold", 0.5))
                         texture_threshold_slider = gr.Slider(label="Texture Threshold", minimum=0, maximum=1, step=0.1, value=settings.get("texture_threshold", 0.6))
@@ -199,24 +189,15 @@ def launch_gradio_interface():
                         save_button = gr.Button("Save Configuration", variant="primary")
                 
                 save_button.click(
-                    fn=update_keys,
-                    inputs=[
-                        motion_threshold_slider,
-                        texture_threshold_slider,
-                        audio_threshold_slider,
-                        keywords_input,
-                        image_size_dropdown,
-                        target_length_slider,
-                        output_quality_dropdown,
-                        use_gpu_checkbox,
-                        cpu_cores_slider
-                    ],
-                    outputs=gr.Textbox(label="Status")
+                    fn=lambda x, y: save_persistent_settings({"input_path": x, "output_path": y}),
+                    inputs=[input_folder, output_folder],
+                    outputs=None
                 )
                 
                 reset_button.click(
-                    fn=reset_settings,
-                    outputs=gr.Textbox(label="Status")
+                    fn=lambda: save_persistent_settings({}),
+                    inputs=None,
+                    outputs=None
                 )
                 
         interface.launch(inbrowser=True)
