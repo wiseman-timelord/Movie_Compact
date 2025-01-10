@@ -85,7 +85,7 @@ call :printSeparator
 set /p choice=Selection; Menu Options = 1-2, Exit MovieConsolidate-Batch = X: 
 
 if "!choice!"=="1" (
-    goto run_movieconsolidate
+    goto run_launcher
     echo Selected: Run MovieConsolidate
     timeout /t 1 >nul
 ) else if "!choice!"=="2" (
@@ -102,7 +102,7 @@ if "!choice!"=="1" (
     goto :main_menu
 )
 
-:run_movieconsolidate
+:run_launcher
 cls
 call :printHeader "Run MovieConsolidate"
 echo.

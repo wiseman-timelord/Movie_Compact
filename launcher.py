@@ -2,11 +2,18 @@
 
 import os
 import cv2
+import platform
+import cpuinfo
+import subprocess
+import sys
+import json
 import numpy as np
 import moviepy.editor as mp
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from moviepy.video.compositing.concatenate import concatenate_videoclips
 from data.temporary import SEARCH_CRITERIA
+from utility import get_video_duration, load_hardware_config, detect_motion, process_video
+from generate import process_videos, process_video
 
 def detect_motion(frame1, frame2, threshold=SEARCH_CRITERIA['motion_threshold']):
     """Detect motion between two frames."""
@@ -62,17 +69,56 @@ def process_video(input_path, output_path):
         print("No highlights detected.")
 
 def main():
-    """Main function to launch the video summarization process."""
-    input_path = "input_video.mp4"  # Replace with actual input path
-    output_path = "output_summary.mp4"  # Replace with actual output path
+    # Load persistent settings
+    settings = load_persistent_settings()
+    input_path = settings.get("input_path", "input")
+    output_path = settings.get("output_path", "output")
 
-    if not os.path.exists(input_path):
-        print(f"Error: Input video file not found at {input_path}.")
+    # Load and print hardware configuration
+    hardware_config = load_hardware_config()
+    print("Hardware Configuration:")
+    for key, value in hardware_config.items():
+        print(f"{key}: {value}")
+
+    # Select optimal processing method
+    if hardware_config["OpenCL"]:
+        print("Using OpenCL for GPU acceleration.")
+    elif hardware_config["Avx2"]:
+        print("Using AVX2 for CPU acceleration.")
+    else:
+        print("Using x64 for CPU processing.")
+
+    # Check if input_path is a directory or a single file
+    if os.path.isdir(input_path):
+        # Process all videos in the input directory
+        if not os.path.exists(input_path):
+            print(f"Error: Input directory not found at {input_path}.")
+            return
+
+        # Ensure output_path exists
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
+
+        print("Starting video summarization for all videos in the directory...")
+        process_videos(input_path, output_path)
+        print("Video summarization complete.")
+    elif os.path.isfile(input_path):
+        # Process a single video file
+        if not os.path.exists(input_path):
+            print(f"Error: Input video file not found at {input_path}.")
+            return
+
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_path)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        print("Starting video summarization for the single file...")
+        process_video(input_path, output_path)
+        print(f"Video summary saved to {output_path}.")
+    else:
+        print(f"Error: Input path {input_path} is neither a directory nor a file.")
         return
-
-    print("Starting video summarization...")
-    process_video(input_path, output_path)
-    print(f"Video summary saved to {output_path}.")
 
 if __name__ == "__main__":
     main()
