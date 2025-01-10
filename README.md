@@ -66,9 +66,9 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 ## Usage
 1. **Installation**:
    - Clone the repository from GitHub to a suitable location.
-   - Run the batch as an Administrator, then install, requirements and libraries and setup folders, through choosing option 2 on the menu.
+   - Run the batch as an Administrator, choosing option 2 on the menu, this will then install, requirements and libraries and setup folders, through `.\installer.py`.
 2. **Running the Program**:
-   - Run the batch as an Administrator, then choose option 1 on the menu.
+   - Run the batch as an Administrator, then choose option 1 on the menu, this will run `.\launcher.py`.
    - Launch the browser and point it to the address of the Gradio interface.
    - Configure the settings in the `Configure` page, then save, and return to `Consolidate` page.
    - assess the information on the `Consolidate` page, then as applicable, click `Start Consolidation`.
