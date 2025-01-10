@@ -31,7 +31,7 @@ Next, the utility.py script handles the core processing functions. It includes m
 
 Then, the generate.py script is supposed to process the videos. It removes paused frames, fast-forwards through uneventful parts, and adjusts the speed of scenes to fit within a specified duration. However, it seems like some parts of this script are still under development, especially the merging of videos and dynamic speed adjustments.
 
-The interface.py script provides a user-friendly interface using Gradio. It allows users to input folder paths containing videos, set target lengths for summaries, choose output qualities, and displays hardware information. This should make it easier for users to interact with the program without needing to dive into the command line.
+The interface.py script provides a user-friendly interface using Gradio. It allows users to input folder paths containing videos, set target lengths for summaries, choose output qualities, and displays hardware information. This should make it easier for users to interact with the program without needing to dive into the command line. the created `.\data\events.txt` will be required to be blanked upon the start of a new project.
 
 The launcher.py script is the main entry point. It loads hardware configuration, selects the best processing methods based on hardware, and starts the summarization process. It also handles merging individual video summaries into a final output.
 
