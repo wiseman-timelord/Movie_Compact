@@ -19,7 +19,24 @@ the current objective for the program is processing to consolidate, one very lar
 4b) with the final video, where it has compiled ALL of the videos into one large video to the specified length, the purpose of the program is then complete,
 5) the user may insert the consolidated section of video into movie maker, between some titles and an intro and credits, etc, to produce their polished gaming video.
 ```
+### Notes...
+```
+First, there's an installer script that sets up the environment. It checks for hardware capabilities like whether the system is 64-bit, supports AVX2 or OpenCL, and records this in a hardware.txt file. It also installs necessary Python packages and sets up default settings in a persistent.json file. That makes sense; setting up the environment is crucial for the program to function correctly.
 
+Next, the utility.py script handles the core processing functions. It includes motion detection using OpenCL for GPU acceleration, which should speed things up if the GPU is capable. There's also a fallback to CPU processing if OpenCL isn't available. Additionally, there's a plan to implement audio analysis using librosa to detect audio events like gunfire, which will help in identifying action scenes.
+
+Then, the generate.py script is supposed to process the videos. It removes paused frames, fast-forwards through uneventful parts, and adjusts the speed of scenes to fit within a specified duration. However, it seems like some parts of this script are still under development, especially the merging of videos and dynamic speed adjustments.
+
+The interface.py script provides a user-friendly interface using Gradio. It allows users to input folder paths containing videos, set target lengths for summaries, choose output qualities, and displays hardware information. This should make it easier for users to interact with the program without needing to dive into the command line.
+
+The launcher.py script is the main entry point. It loads hardware configuration, selects the best processing methods based on hardware, and starts the summarization process. It also handles merging individual video summaries into a final output.
+
+Lastly, the MovieConsolidate.bat script manages the environment setup, checks for admin privileges, sets up a virtual environment, and provides a menu for installing requirements or running the summarization process. This is handy for users who prefer a batch file for managing the program.
+
+Potential challenges include ensuring compatibility across different hardware setups, optimizing performance for various systems, and handling edge cases in video processing like inconsistent frame rates or different codecs. Future enhancements might involve integrating AI for smarter scene selection, which could improve the summarization process.
+
+Overall, the program aims to streamline creating concise, action-packed video summaries, making it easier for users to produce high-quality content with minimal effort.
+```
 
 
 ## Description
