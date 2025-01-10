@@ -3,25 +3,19 @@ Status: Alpha (early version)
 
 ### Plan...
 ```
-the current objective for the program is processing to consolidate, one very large or multiple large clips, into a single action packed consolidated movie clip...
-0) we need some kind of text output logging on the main display, we should log actions and output to a `.\data\events.txt`, that is then displayed in a text box in the main "Consolidate" page.
-1a) the specified input folder will be read, and a file list created from there, these are the files we are processing in alphabetical order, and the total length of all clips will be assessed, and displayed somewhere for record, at the start of each phase, the sizes should be displayed, so as to assess where time is being saved.
-1b) the videos should then be converted into 360p videos outputted by default in the `work` folder, these will later be used for faster assessment of frames/data, but we will be producing relating editing upon the full quality versions, this way the system memory will not be over-loaded by HD videos.
-...and then with the preview versions of teh videos created...
-2a) cutting frames where the screen is actually paused, for example on a menu or message that popped up.
-2b) fast forwarding on menu access of any kind.
-...if we can do those things, it would be sweet. as a primary processing, and the videos will then again be individually outputted,and then after that, then secondary processing...
-3a) fast forwarding on sections of clips where extremely little changes for over a definable amount of time, for example >10 seconds.
-3b) output the new individual videos, as the above processing would be done for each video individually.
-...if we can do those things, as secondary processing, and the videos will then again be individually outputted, and then after that, then tertiary processing...
-4a) after updated videos are outputted, then we need to know the new total length currently of all the videos selected, 
-4b) with the new length known, we would then  be having to detect sections within the videos where the contents is largely the same, and these sections would be "scenes".
-4c) The "scenes" are where we are going to squash down the time, start at normal speed at the start of a given scene, then be incrementally speeded up to its mid-point where it is at most highest speed, then incrementally slowed to normal speed, for the ending of the relevant "scene", before next scene of footage, so as for time to be variable, enabling large scenes to be dynamically compacted, to a degree, that are predicted to consolidated the final combined result, to the specified time period for the final video, however the calculation is best done, but, as are possible to do so, we need to also be ensuring to include complete sections in real-time for action scenes, ie gunfire/violence/explosions detected within scene.
-4d) the videos will then again be individually outputted, as the final versions of the videos.
-...if we can do those things, as tertiary processing, and the videos will then again be individually outputted, and then after that, then fourth phase...
-5a) the final versions of the individual movie files, will then be merged in the correct alphabetic order, and the final video will be produced, that are hopefully something around the intended specified length for the video. Ideally having 30mins of give, more or less, around the indended final length would be acceptable for a 6 hour video consolidated from for example 12 hours, but however it ends up fitting best in relevance to the speeding up and down, we will have to fully theorise that part.
-5b) with the final video, where it has compiled ALL of the videos into one large video to the specified length, the purpose of the program is then complete,
-6) the user may insert the consolidated section of video into movie maker, between some titles and an intro and credits, etc, to produce their polished gaming video.
+the current objective for the program is processing to consolidate, one very large clip, into a single action packed consolidated movie clip, that can then have intro/outro/title/credits added, to make a feature video...
+1a) we need some kind of text output logging on the main display, we should log actions and output to a `.\data\events.txt`, that is then displayed in a text box in the main "Consolidate" page, I want this to be a box that people will be watching for updates during the processes, so it will be required to update itself.
+1b) the specified input file will be read, and a filename/path known and the total length/filesize of the clip will be assessed, and then the amount to reduce the clip will be calculated.
+2) the videos should then be converted into 360p videos outputted by default in the `work` folder, these will later be used for faster assessment of frames/data, but we will be producing relating editing upon the full quality versions, this would be done via knowing the relating times in the video in which to apply the edits, and this way the system memory will not be over-loaded by the full quality video; and then with the preview versions of teh videos created.
+3) cutting frames where the screen is actually paused, for example on a menu or message that popped up.
+4a) fast forwarding on menu access of any kind, where there is still some motion.
+4b) fast forwarding on sections of clips where extremely little changes for over a definable amount of time, for example >10 seconds.
+5a) then we need to know the new total length currently of the processed video, because the processes before were somewhat of a cleanup, where the next stage will be intelligently speeding up and slowing down, to a necessary amount, in order to fit the video to the specified length...
+5b) with the new length known, we would then  be having to detect sections within the videos where the contents is largely the same, and these sections would be "scenes". 
+5b) We also need to find the sections where there there is more noise, these would be action scenesinvolving battles such as gunfire/violence/explosions.
+5c) The "scenes" are where we are going to squash down the time, start at normal speed at the start of a given scene, then be incrementally speeded up to its mid-point where it is at most highest speed, then incrementally slowed to normal speed, for the ending of the relevant "scene", before next scene of footage, so as for time to be variable, enabling large scenes to be dynamically compacted, to a degree, that are predicted to consolidated the final combined result, to the specified time period for the final video, however the calculation is best done, but, as are possible to do so, we need to also be ensuring to include complete real-time sections for the action scenes. we will have to fully theorise that part.
+6) After all the editing, then the final video will be produced, that are hopefully something around the intended specified length for the video. Ideally having 30mins of give, more or less, around the indended final length would be acceptable for, for example, a 10 hour video consolidated to 2-4 hours, but however it ends up fitting best, it does not need to be precise.
+7) with the final video, where it has compiled ALL of the editing into one action packed video to the specified length, the purpose of the program is then complete, the user may insert the consolidated section of video into movie maker, between some titles and an intro and credits, etc, to produce their polished gaming video.
 ```
 ### Notes...
 ```
