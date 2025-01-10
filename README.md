@@ -59,19 +59,21 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 
 ## Requirements
 - **Python 3.8 or higher**
-- **OpenCV library** for video processing
-- **moviepy** for video editing
-- **Gradio** for the web interface
-- **OS**: Windows, for Windows Gaming. 
+- **Python Libraries**: installed by installer; OpenCV (video processing), moviepy (video editing), Gradio (web interface).
+- **OS**: Windows; Targetting Windows gamers, whom intend to edit the Video in same system/boot. 
+- **Hardware**: Compatible with, x64. Avx2, OpenCL. No CUDA, support or plans, currently.
 
 ## Usage
 1. **Installation**:
-   - Clone the repository from GitHub.
-   - Install required libraries using pip.
+   - Clone the repository from GitHub to a suitable location.
+   - Run the batch as an Administrator, then install, requirements and libraries and setup folders, through choosing option 2 on the menu.
 2. **Running the Program**:
-   - Execute the main script to launch the Gradio interface.
-   - Upload a gaming video and adjust the motion and texture thresholds.
-   - Generate and download the condensed video summary.
+   - Run the batch as an Administrator, then choose option 1 on the menu.
+   - Launch the browser and point it to the address of the Gradio interface.
+   - Configure the settings in the `Configure` page, then save, and return to `Consolidate` page.
+   - assess the information on the `Consolidate` page, then as applicable, click `Start Consolidation`.
+   - Watch the output from the processes of consolidation, hopefully it will be verbose.
+   - When processing is finished it will also tell you, you should then assess the outputted file.
 
 ## Notation
 - The program is named `Movie Consolidator`, because its intended to compliment `Movie Maker`, as `Movie Maker` has issues with >6 hour clips.
