@@ -1,24 +1,47 @@
 # .\scripts\interface.py
 
-# .\scripts\interface.py
-
-import os, json, gradio as gr, sys
-from typing import Dict, List, Tuple, Any, Optional
+import os
+import json
+import gradio as gr
+import sys
+from typing import Dict, Any, Optional, Tuple
 from utility import (
     load_hardware_config,
     load_settings,
-    get_video_files,
-    get_video_duration,
-    log_event
+    log_event,
+    log_manager,
+    MetricsCollector
 )
-from scripts.generate import process_videos, process_video
+from process import VideoProcessor
+
+class MovieConsolidatorError(Exception):
+    """Base exception for Movie Consolidator errors."""
+    pass
+
+class ProcessingError(MovieConsolidatorError):
+    """Raised when video processing fails."""
+    pass
+
+class AnalysisError(MovieConsolidatorError):
+    """Raised when video analysis fails."""
+    pass
+
+class HardwareError(MovieConsolidatorError):
+    """Raised when hardware-related operations fail."""
+    pass
+
+class ConfigurationError(MovieConsolidatorError):
+    """Raised when configuration-related operations fail."""
+    pass
 
 class GradioInterface:
     def __init__(self):
         self.settings = load_settings()
         self.hardware_config = load_hardware_config()
-        self.search_criteria = self.settings.get('search', {})
         self.video_config = self.settings.get('video', {})
+        self.metrics = MetricsCollector()
+        self.processor = VideoProcessor()
+        self.active_process = False
 
     def load_persistent_settings(self) -> Dict[str, Any]:
         """Load settings from persistent.json."""
@@ -29,7 +52,7 @@ class GradioInterface:
                     return json.load(f)
             return {}
         except Exception as e:
-            log_event(f"Error loading persistent settings: {e}")
+            log_event(f"Error loading persistent settings: {e}", "ERROR", "CONFIG")
             return {}
 
     def save_persistent_settings(self, settings: Dict[str, Any]) -> None:
@@ -38,98 +61,78 @@ class GradioInterface:
             persistent_file = os.path.join("data", "persistent.json")
             with open(persistent_file, "w") as f:
                 json.dump(settings, f, indent=4)
-            log_event("Settings saved successfully")
+            log_event("Settings saved successfully", "INFO", "CONFIG")
         except Exception as e:
-            log_event(f"Error saving settings: {e}")
+            log_event(f"Error saving settings: {e}", "ERROR", "CONFIG")
 
     def update_event_log(self) -> str:
-        """Read and return the event log content."""
+        """Get recent logs for display."""
+        logs = log_manager.get_recent_logs(num_lines=20)
+        return "\n".join(logs)
+
+    def update_metrics_display(self) -> str:
+        """Get current metrics for display."""
+        if not self.active_process:
+            return "No active processing."
+        return self.metrics.get_metrics_report()
+
+    def get_video_info(self, video_path: str) -> Tuple[str, float]:
+        """Get information about the selected video."""
         try:
-            log_file = os.path.join("data", "events.txt")
-            if os.path.exists(log_file):
-                with open(log_file, "r") as f:
-                    lines = f.readlines()
-                    # Return last 20 lines for display
-                    return "".join(lines[-20:])
-            return "No events logged yet."
+            import moviepy.editor as mp
+            clip = mp.VideoFileClip(video_path)
+            duration = clip.duration
+            size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            fps = clip.fps
+            resolution = f"{clip.w}x{clip.h}"
+            clip.close()
+
+            info = (
+                f"Video Information:\n"
+                f"Duration: {duration:.1f} seconds ({duration/60:.1f} minutes)\n"
+                f"Size: {size_mb:.1f} MB\n"
+                f"FPS: {fps}\n"
+                f"Resolution: {resolution}"
+            )
+            return info, duration
         except Exception as e:
-            return f"Error reading event log: {e}"
+            log_event(f"Error getting video info: {e}", "ERROR", "INFO")
+            return "Error reading video file", 0.0
 
-    def parse_folder_paths(self, folder_paths_str: str) -> List[str]:
-        """Parse semicolon-separated folder paths."""
-        return [path.strip() for path in folder_paths_str.split(';') if path.strip()]
-
-    def list_video_files(self, folders: List[str]) -> List[Dict[str, Any]]:
-        """List video files with metadata."""
-        video_files = []
-        supported_formats = self.video_config.get('supported_formats', ['.mp4', '.avi', '.mkv'])
-        
+    def process_video(self, video_path: str, target_minutes: float) -> str:
+        """Process a single video file."""
         try:
-            for folder in folders:
-                if not os.path.exists(folder):
-                    log_event(f"Folder not found: {folder}")
-                    continue
-                    
-                for root, _, files in os.walk(folder):
-                    for file in files:
-                        if os.path.splitext(file)[1].lower() in supported_formats:
-                            full_path = os.path.join(root, file)
-                            duration = get_video_duration(full_path)
-                            video_files.append({
-                                'path': full_path,
-                                'name': file,
-                                'duration': duration,
-                                'size': os.path.getsize(full_path)
-                            })
-            
-            log_event(f"Found {len(video_files)} video files")
-            return video_files
-            
-        except Exception as e:
-            log_event(f"Error listing video files: {e}")
-            return []
+            self.active_process = True
+            if not video_path:
+                return "No video file selected."
 
-    def format_video_list(self, videos: List[Dict[str, Any]]) -> Tuple[str, float, int]:
-        """Format video list for display."""
-        display_list = []
-        total_duration = 0
-        
-        for video in videos:
-            name = video['name']
-            if len(name) > 40:
-                name = name[:37] + "..."
-            duration = video['duration']
-            size_mb = video['size'] / (1024 * 1024)
-            
-            display_list.append(f"{name} - {duration:.1f}s - {size_mb:.1f}MB")
-            total_duration += duration
-            
-        return "\n".join(display_list), total_duration, len(videos)
+            output_dir = self.settings.get("paths", {}).get("output_path", "output")
+            output_path = os.path.join(
+                output_dir, 
+                f"processed_{os.path.basename(video_path)}"
+            )
 
-    def process_videos_interface(self, folder_paths_str: str) -> str:
-        """Process videos from interface."""
-        try:
-            folders = self.parse_folder_paths(folder_paths_str)
-            if not folders:
-                return "No folders specified."
-                
-            log_event("Starting video processing from interface")
-            settings = self.load_persistent_settings()
-            output_dir = settings.get("paths", {}).get("output_path", "output")
+            log_event("Starting video processing", "INFO", "PROCESSING")
+            self.metrics.start_phase_timing("processing")
+
+            # Convert minutes to seconds for processing
+            target_duration = target_minutes * 60
             
-            # Process each folder
-            for folder in folders:
-                if not os.path.exists(folder):
-                    log_event(f"Folder not found: {folder}")
-                    continue
-                    
-                process_videos(folder, output_dir)
+            result = self.processor.process_video(video_path, output_path, target_duration)
             
-            return f"Processing complete. Results saved to {output_dir}"
+            self.metrics.end_phase_timing("processing")
+            self.active_process = False
+            
+            if result:
+                return (f"Processing complete. Output saved to: {output_path}\n\n"
+                       f"{self.metrics.get_metrics_report()}")
+            else:
+                return "Processing failed. Check the logs for details."
             
         except Exception as e:
             error_msg = f"Processing failed: {e}"
-            log_event(error_msg)
+            log_event(error_msg, "ERROR", "PROCESSING")
+            self.active_process = False
             return error_msg
 
     def launch_interface(self):
@@ -137,66 +140,103 @@ class GradioInterface:
         settings = self.load_persistent_settings()
         
         with gr.Blocks(title="Movie Consolidator") as interface:
+            gr.Markdown(
+                """
+                # Movie Consolidator
+                Convert long gaming sessions into concise highlight reels.
+                Upload a video and specify your target duration in minutes.
+                """
+            )
+            
             with gr.Tabs():
-                # Consolidation Tab
-                with gr.Tab("Consolidation"):
+                # Main Processing Tab
+                with gr.Tab("Process Video"):
                     with gr.Row():
                         with gr.Column(scale=2):
-                            gr.Markdown("# Video Consolidation")
-                            
                             # Input Section
                             with gr.Group():
-                                folder_input = gr.Textbox(
-                                    label="Input Folders (semicolon-separated)",
-                                    placeholder="Enter folder paths here"
+                                gr.Markdown("### Select Input Video")
+                                video_input = gr.File(
+                                    label="Select Video File",
+                                    file_types=["video"]
                                 )
-                                list_button = gr.Button("List Videos")
-                                video_list = gr.Textbox(label="Selected Videos", interactive=False)
-                                total_duration = gr.Number(label="Total Duration (seconds)", interactive=False)
-                                file_count = gr.Number(label="Number of Files", interactive=False)
+                                video_info = gr.TextArea(
+                                    label="Video Information",
+                                    interactive=False,
+                                    lines=5
+                                )
+                                target_duration = gr.Number(
+                                    label="Target Duration (minutes)",
+                                    value=30,
+                                    minimum=1,
+                                    info="Desired length of the final video in minutes"
+                                )
                             
                             # Process Section
                             with gr.Group():
-                                process_button = gr.Button("Process Videos", variant="primary")
-                                current_phase = gr.Textbox(label="Current Phase", interactive=False)
+                                gr.Markdown("### Processing Controls")
+                                process_button = gr.Button(
+                                    "Process Video", 
+                                    variant="primary",
+                                    scale=2
+                                )
+                                current_phase = gr.Textbox(
+                                    label="Current Processing Phase",
+                                    interactive=False
+                                )
                                 progress_bar = gr.Progress()
-                                status_output = gr.Textbox(label="Status", interactive=False)
+                                status_output = gr.TextArea(
+                                    label="Processing Status",
+                                    interactive=False,
+                                    lines=10
+                                )
 
-                        # Event Log Column
+                        # Monitoring Column
                         with gr.Column(scale=1):
-                            event_log = gr.Textbox(
-                                label="Processing Log",
+                            # Event Log
+                            gr.Markdown("### Live Processing Log")
+                            event_log = gr.TextArea(
+                                label="Recent Events",
                                 value=self.update_event_log(),
                                 interactive=False,
-                                max_lines=20,
+                                lines=15,
                                 autoscroll=True
                             )
-                            refresh_log = gr.Button("Refresh Log")
+                            
+                            # Metrics Display
+                            gr.Markdown("### Processing Metrics")
+                            metrics_display = gr.TextArea(
+                                label="Current Metrics",
+                                interactive=False,
+                                lines=10
+                            )
+                            
+                            refresh_log = gr.Button("Refresh Displays")
                 
                 # Configuration Tab
-                with gr.Tab("Configuration"):
-                    gr.Markdown("# Settings")
+                with gr.Tab("Settings"):
+                    gr.Markdown("## Processing Settings")
                     
                     with gr.Row():
                         # Hardware Info
                         with gr.Column():
+                            gr.Markdown("### Hardware Configuration")
                             hardware_info = gr.JSON(
-                                label="Hardware Features",
-                                value=self.hardware_config
+                                label="Available Hardware Features",
+                                value=self.hardware_config,
+                                interactive=False
                             )
                         
                         # Video Settings
                         with gr.Column():
-                            target_length = gr.Number(
-                                label="Target Length (minutes)",
-                                value=settings.get("video_settings", {}).get("target_length", 30)
-                            )
+                            gr.Markdown("### Video Settings")
                             preview_height = gr.Slider(
-                                label="Preview Height",
+                                label="Preview Resolution Height",
                                 minimum=240,
                                 maximum=720,
                                 step=120,
-                                value=settings.get("video_settings", {}).get("preview_height", 360)
+                                value=settings.get("video_settings", {}).get("preview_height", 360),
+                                info="Height of preview video used for analysis"
                             )
 
                     with gr.Row():
@@ -204,69 +244,22 @@ class GradioInterface:
                         with gr.Column():
                             gr.Markdown("### Detection Settings")
                             motion_threshold = gr.Slider(
-                                label="Motion Threshold",
+                                label="Motion Detection Sensitivity",
                                 minimum=0,
                                 maximum=1,
                                 step=0.1,
-                                value=settings.get("motion_threshold", 0.5)
-                            )
-                            texture_threshold = gr.Slider(
-                                label="Texture Threshold",
-                                minimum=0,
-                                maximum=1,
-                                step=0.1,
-                                value=settings.get("texture_threshold", 0.6)
+                                value=settings.get("motion_threshold", 0.5),
+                                info="Lower values detect more subtle movements"
                             )
                             static_threshold = gr.Slider(
                                 label="Static Frame Threshold",
                                 minimum=0.9,
                                 maximum=1.0,
                                 step=0.01,
-                                value=settings.get("static_threshold", 0.99)
+                                value=settings.get("static_threshold", 0.99),
+                                info="Higher values more aggressively detect static frames"
                             )
 
-                        # Scene Settings
-                        with gr.Column():
-                            gr.Markdown("### Scene Settings")
-                            min_scene_length = gr.Number(
-                                label="Minimum Scene Length (seconds)",
-                                value=settings.get("scene_settings", {}).get("min_scene_length", 2)
-                            )
-                            max_scene_length = gr.Number(
-                                label="Maximum Scene Length (seconds)",
-                                value=settings.get("scene_settings", {}).get("max_scene_length", 300)
-                            )
-                            scene_threshold = gr.Slider(
-                                label="Scene Change Threshold",
-                                minimum=10,
-                                maximum=100,
-                                step=5,
-                                value=settings.get("scene_settings", {}).get("scene_threshold", 30)
-                            )
-
-                    with gr.Row():
-                        # Processing Settings
-                        with gr.Column():
-                            gr.Markdown("### Processing Settings")
-                            use_gpu = gr.Checkbox(
-                                label="Use GPU Acceleration",
-                                value=settings.get("processor_settings", {}).get("use_gpu", True)
-                            )
-                            cpu_cores = gr.Slider(
-                                label="CPU Threads",
-                                minimum=1,
-                                maximum=16,
-                                step=1,
-                                value=settings.get("processor_settings", {}).get("cpu_cores", 4)
-                            )
-                            batch_size = gr.Slider(
-                                label="GPU Batch Size",
-                                minimum=16,
-                                maximum=128,
-                                step=16,
-                                value=settings.get("processor_settings", {}).get("gpu_batch_size", 32)
-                            )
-                        
                         # Speed Settings
                         with gr.Column():
                             gr.Markdown("### Speed Settings")
@@ -275,70 +268,53 @@ class GradioInterface:
                                 minimum=1.0,
                                 maximum=8.0,
                                 step=0.5,
-                                value=settings.get("speed_settings", {}).get("max_speed_factor", 4.0)
-                            )
-                            transition_frames = gr.Slider(
-                                label="Speed Transition Frames",
-                                minimum=10,
-                                maximum=60,
-                                step=5,
-                                value=settings.get("speed_settings", {}).get("transition_frames", 30)
+                                value=settings.get("speed_settings", {}).get("max_speed_factor", 4.0),
+                                info="Maximum speed multiplier for non-action scenes"
                             )
 
                     # Save/Reset Buttons
                     with gr.Row():
                         save_button = gr.Button("Save Settings", variant="primary")
                         reset_button = gr.Button("Reset to Default")
-                
+
                 # Event handlers
-                list_button.click(
-                    fn=lambda x: self.format_video_list(self.list_video_files(self.parse_folder_paths(x))),
-                    inputs=[folder_input],
-                    outputs=[video_list, total_duration, file_count]
+                video_input.change(
+                    fn=lambda x: self.get_video_info(x.name) if x else ("No file selected", 0),
+                    inputs=[video_input],
+                    outputs=[video_info]
                 )
                 
                 process_button.click(
-                    fn=self.process_videos_interface,
-                    inputs=[folder_input],
+                    fn=self.process_video,
+                    inputs=[video_input, target_duration],
                     outputs=[status_output]
                 )
 
                 refresh_log.click(
-                    fn=self.update_event_log,
-                    outputs=[event_log]
+                    fn=lambda: (
+                        self.update_event_log(),
+                        self.update_metrics_display()
+                    ),
+                    outputs=[event_log, metrics_display]
                 )
                 
-                # Save all settings
+                # Settings handlers
                 save_button.click(
                     fn=lambda *args: self.save_persistent_settings({
                         "video_settings": {
-                            "target_length": args[0],
-                            "preview_height": args[1]
+                            "preview_height": args[0]
                         },
-                        "motion_threshold": args[2],
-                        "texture_threshold": args[3],
-                        "static_threshold": args[4],
-                        "scene_settings": {
-                            "min_scene_length": args[5],
-                            "max_scene_length": args[6],
-                            "scene_threshold": args[7]
-                        },
-                        "processor_settings": {
-                            "use_gpu": args[8],
-                            "cpu_cores": args[9],
-                            "gpu_batch_size": args[10]
-                        },
+                        "motion_threshold": args[1],
+                        "static_threshold": args[2],
                         "speed_settings": {
-                            "max_speed_factor": args[11],
-                            "transition_frames": args[12]
+                            "max_speed_factor": args[3]
                         }
                     }),
                     inputs=[
-                        target_length, preview_height,
-                        motion_threshold, texture_threshold, static_threshold,
-                        min_scene_length, max_scene_length, scene_threshold,
-                        use_gpu, cpu_cores, batch_size,
-                        max_speed, transition_frames
+                        preview_height,
+                        motion_threshold,
+                        static_threshold,
+                        max_speed
                     ]
                 )
                 
@@ -346,38 +322,31 @@ class GradioInterface:
                 reset_button.click(
                     fn=lambda: {
                         "video_settings": {
-                            "target_length": 30,
                             "preview_height": 360
                         },
                         "motion_threshold": 0.5,
-                        "texture_threshold": 0.6,
                         "static_threshold": 0.99,
-                        "scene_settings": {
-                            "min_scene_length": 2,
-                            "max_scene_length": 300,
-                            "scene_threshold": 30
-                        },
-                        "processor_settings": {
-                            "use_gpu": True,
-                            "cpu_cores": 4,
-                            "gpu_batch_size": 32
-                        },
                         "speed_settings": {
-                            "max_speed_factor": 4.0,
-                            "transition_frames": 30
+                            "max_speed_factor": 4.0
                         }
                     },
                     outputs=[
-                        target_length, preview_height,
-                        motion_threshold, texture_threshold, static_threshold,
-                        min_scene_length, max_scene_length, scene_threshold,
-                        use_gpu, cpu_cores, batch_size,
-                        max_speed, transition_frames
+                        preview_height,
+                        motion_threshold,
+                        static_threshold,
+                        max_speed
                     ]
                 )
             
-            # Auto-refresh event log every 5 seconds
-            gr.on(lambda: gr.Timer(5), self.update_event_log, outputs=[event_log])
+            # Auto-refresh displays every 2 seconds
+            gr.on(
+                lambda: gr.Timer(2), 
+                lambda: (
+                    self.update_event_log(),
+                    self.update_metrics_display()
+                ),
+                outputs=[event_log, metrics_display]
+            )
             
             # Launch in browser
             interface.launch(inbrowser=True)

@@ -1,445 +1,511 @@
 # .\scripts\utility.py
 
-# .\scripts\generate.py
+import os, cv2, numpy as np, pyopencl as cl, json, datetime, sys, psutil
+from typing import Tuple, List, Dict, Any, Generator, Optional
+import moviepy.editor as mp
+from interface import HardwareError, ConfigurationError, MovieConsolidatorError
 
-import os, sys, cv2, numpy as np, moviepy.editor as mp
-from typing import List, Dict, Any, Optional, Tuple
-from utility import (
-    analyze_segment,
-    extract_frames,
-    load_settings,
-    log_event,
-    cleanup_work_directory,
-    ProgressTracker,
-    batch_process_frames,
-    extract_frames_optimized
-)
-
-class VideoProcessor:
+class MetricsCollector:
+    """Collect and track processing metrics."""
     def __init__(self):
-        self.settings = load_settings()
-        self.search_criteria = self.settings.get('search', {})
-        self.video_config = self.settings.get('video', {})
-        self.work_dir = self.video_config.get('temp_directory', 'work')
-        self.progress = None
+        self.metrics = {
+            'total_duration': 0,
+            'total_size': 0,
+            'processed_frames': 0,
+            'processing_time': 0,
+            'memory_usage': 0,
+            'phase_timings': {},
+            'file_metrics': {}
+        }
+        self.start_time = datetime.datetime.now()
+
+    def update_file_metrics(self, file_path: str, metrics: Dict[str, Any]) -> None:
+        """Update metrics for a specific file."""
+        self.metrics['file_metrics'][file_path] = metrics
+        self.metrics['total_duration'] += metrics.get('duration', 0)
+        self.metrics['total_size'] += metrics.get('size', 0)
+
+    def update_processing_metrics(self, frames: int, memory: int) -> None:
+        """Update processing metrics."""
+        self.metrics['processed_frames'] += frames
+        self.metrics['memory_usage'] = max(self.metrics['memory_usage'], memory)
+
+    def start_phase_timing(self, phase_name: str) -> None:
+        """Start timing a processing phase."""
+        self.metrics['phase_timings'][phase_name] = {
+            'start': datetime.datetime.now(),
+            'end': None,
+            'duration': None
+        }
+
+    def end_phase_timing(self, phase_name: str) -> None:
+        """End timing a processing phase."""
+        if phase_name in self.metrics['phase_timings']:
+            phase = self.metrics['phase_timings'][phase_name]
+            phase['end'] = datetime.datetime.now()
+            phase['duration'] = (phase['end'] - phase['start']).total_seconds()
+
+    def get_metrics_report(self) -> str:
+        """Generate a detailed metrics report."""
+        report = []
+        report.append("Processing Metrics Report")
+        report.append("-" * 50)
         
-    def process_videos(self, input_dir: str, output_dir: str) -> None:
-        """Process all videos in input directory."""
-        try:
-            video_files = [
-                f for f in os.listdir(input_dir)
-                if os.path.splitext(f)[1].lower() in self.video_config.get('supported_formats', [])
-            ]
-            
-            if not video_files:
-                log_event("No video files found in input directory")
-                return
-                
-            # Initialize progress tracking
-            total_files = len(video_files)
-            self.progress = ProgressTracker(total_files * 5)  # 5 phases per file
-            
-            total_duration = self._calculate_total_duration(input_dir, video_files)
-            log_event(f"Starting processing of {total_files} videos. Total duration: {total_duration:.2f} seconds")
-            
-            # Phase 1: Create preview versions
-            self.progress.update(phase="Creating Preview Versions")
-            preview_files = self._create_preview_versions(input_dir, video_files)
-            
-            # Phase 2: Process static content and menus
-            self.progress.update(phase="Processing Static Content")
-            processed_files_p2 = self._process_phase2(preview_files)
-            
-            # Phase 3: Process low activity sections
-            self.progress.update(phase="Processing Low Activity")
-            processed_files_p3 = self._process_phase3(processed_files_p2)
-            
-            # Phase 4: Scene detection and speed adjustment
-            self.progress.update(phase="Scene Detection")
-            processed_files_p4 = self._process_phase4(processed_files_p3, total_duration)
-            
-            # Phase 5: Final compilation
-            self.progress.update(phase="Final Compilation")
-            final_output = self._compile_final_video(processed_files_p4, output_dir)
-            
-            cleanup_work_directory()
-            log_event("Video processing complete")
-            
-        except Exception as e:
-            log_event(f"Error in process_videos: {e}")
-            cleanup_work_directory()
-
-    def _calculate_total_duration(self, input_dir: str, video_files: List[str]) -> float:
-        """Calculate total duration of all input videos."""
-        total_duration = 0
-        for video_file in video_files:
-            video_path = os.path.join(input_dir, video_file)
-            try:
-                clip = mp.VideoFileClip(video_path)
-                duration = clip.duration
-                size_mb = os.path.getsize(video_path) / (1024 * 1024)
-                log_event(f"Video: {video_file}, Duration: {duration:.2f}s, Size: {size_mb:.2f}MB")
-                total_duration += duration
-                clip.close()
-            except Exception as e:
-                log_event(f"Error calculating duration for {video_file}: {e}")
-        return total_duration
-
-    def _create_preview_versions(self, input_dir: str, video_files: List[str]) -> List[str]:
-        """Create 360p preview versions of all videos."""
-        preview_files = []
-        preview_height = self.settings.get('video_settings', {}).get('preview_height', 360)
+        # Overall metrics
+        total_time = (datetime.datetime.now() - self.start_time).total_seconds()
+        report.append(f"Total Processing Time: {total_time:.2f} seconds")
+        report.append(f"Total Duration Processed: {self.metrics['total_duration']:.2f} seconds")
+        report.append(f"Total Size Processed: {self.metrics['total_size'] / (1024*1024):.2f} MB")
+        report.append(f"Total Frames Processed: {self.metrics['processed_frames']}")
+        report.append(f"Peak Memory Usage: {self.metrics['memory_usage'] / (1024*1024):.2f} MB")
         
-        for video_file in video_files:
-            input_path = os.path.join(input_dir, video_file)
-            preview_path = os.path.join(self.work_dir, f"preview_{video_file}")
-            try:
-                clip = mp.VideoFileClip(input_path)
-                aspect_ratio = clip.w / clip.h
-                new_height = preview_height
-                new_width = int(new_height * aspect_ratio)
-                preview = clip.resize(height=new_height, width=new_width)
-                preview.write_videofile(preview_path, codec='libx264')
-                preview_files.append(preview_path)
-                clip.close()
-                preview.close()
-                log_event(f"Created preview version: {preview_path}")
-                self.progress.update()
-            except Exception as e:
-                log_event(f"Error creating preview for {video_file}: {e}")
-        return preview_files
-
-    def _detect_static_frame(self, frame1: np.ndarray, frame2: np.ndarray, threshold: float = 0.99) -> bool:
-        """Detect if frames are static (nearly identical)."""
-        try:
-            diff = cv2.absdiff(frame1, frame2)
-            diff_score = 1 - (np.count_nonzero(diff) / diff.size)
-            return diff_score > threshold
-        except Exception as e:
-            log_event(f"Error in static frame detection: {e}")
-            return False
-
-    def _detect_menu_screen(self, frame: np.ndarray) -> bool:
-        """Detect if frame is likely a menu screen."""
-        try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(gray, 50, 150)
-            edge_density = np.count_nonzero(edges) / edges.size
-            return edge_density > 0.1
-        except Exception as e:
-            log_event(f"Error in menu detection: {e}")
-            return False
-
-    def _process_phase2(self, preview_files: List[str]) -> List[str]:
-        """Process static content and menu screens."""
-        processed_files = []
-        batch_size = self.settings.get('hardware', {}).get('gpu_batch_size', 32)
+        # Phase timings
+        report.append("\nPhase Timings:")
+        for phase, timing in self.metrics['phase_timings'].items():
+            if timing['duration'] is not None:
+                report.append(f"  {phase}: {timing['duration']:.2f} seconds")
         
-        for preview_file in preview_files:
-            output_path = os.path.join(self.work_dir, f"p2_{os.path.basename(preview_file)}")
-            try:
-                frames = []
-                static_segments = []
-                menu_segments = []
-                
-                # Use optimized frame extraction
-                for frame in extract_frames_optimized(preview_file):
-                    if frame is not None:
-                        frames.append(frame)
-                
-                # Process frames in batches
-                for i in range(1, len(frames)):
-                    # Process static detection in batches
-                    if self._detect_static_frame(frames[i-1], frames[i]):
-                        static_segments.append(i)
-                    
-                    # Process menu detection in batches
-                    if self._detect_menu_screen(frames[i]):
-                        menu_segments.append(i)
-                
-                # Process video
-                clip = mp.VideoFileClip(preview_file)
-                final_clip = self._apply_speed_changes(clip, static_segments, menu_segments)
-                final_clip.write_videofile(output_path, codec='libx264')
-                processed_files.append(output_path)
-                
-                clip.close()
-                final_clip.close()
-                self.progress.update()
-                
-            except Exception as e:
-                log_event(f"Error in phase 2 processing for {preview_file}: {e}")
+        # File metrics
+        report.append("\nFile Details:")
+        for file_path, metrics in self.metrics['file_metrics'].items():
+            report.append(f"\n  {os.path.basename(file_path)}:")
+            report.append(f"    Duration: {metrics.get('duration', 0):.2f} seconds")
+            report.append(f"    Size: {metrics.get('size', 0) / (1024*1024):.2f} MB")
+            report.append(f"    Frames: {metrics.get('frames', 0)}")
         
-        return processed_files
+        return "\n".join(report)
 
-    def _apply_speed_changes(self, clip: mp.VideoFileClip, static_segments: List[int], 
-                           menu_segments: List[int]) -> mp.VideoFileClip:
-        """Apply speed changes to video segments."""
+class FileProcessor:
+    """Handle file operations and tracking."""
+    def __init__(self, supported_formats: List[str]):
+        self.supported_formats = supported_formats
+        self.processed_files = {}
+        self.metrics_collector = MetricsCollector()
+
+    def scan_directory(self, directory: str) -> List[str]:
+        """Scan directory for supported video files."""
+        video_files = []
         try:
-            # Convert frame indices to timestamps
-            fps = clip.fps
-            segments = []
-            current_pos = 0
-            
-            # Process all segments in order
-            all_segments = sorted(set(static_segments + menu_segments))
-            for segment in all_segments:
-                start_time = current_pos / fps
-                end_time = segment / fps
-                
-                if segment in static_segments:
-                    # Skip static segments
-                    current_pos = segment + 1
-                elif segment in menu_segments:
-                    # Speed up menu segments
-                    subclip = clip.subclip(start_time, end_time).speedx(2.0)
-                    segments.append(subclip)
-                    current_pos = segment + 1
-                else:
-                    # Keep normal segments
-                    subclip = clip.subclip(start_time, end_time)
-                    segments.append(subclip)
-                    current_pos = segment + 1
-            
-            # Add remaining video
-            if current_pos / fps < clip.duration:
-                segments.append(clip.subclip(current_pos / fps))
-            
-            return mp.concatenate_videoclips(segments) if segments else clip
-            
+            for root, _, files in os.walk(directory):
+                for file in sorted(files):
+                    if any(file.lower().endswith(fmt) for fmt in self.supported_formats):
+                        full_path = os.path.join(root, file)
+                        video_files.append(full_path)
+                        self._collect_file_metrics(full_path)
+            return video_files
         except Exception as e:
-            log_event(f"Error applying speed changes: {e}")
-            return clip
+            log_event(f"Error scanning directory {directory}: {e}", "ERROR", "FILE_SCAN")
+            return []
 
-    def _detect_low_activity(self, frames: List[np.ndarray], threshold: float = 0.1) -> bool:
-        """Detect sections with low activity."""
+    def _collect_file_metrics(self, file_path: str) -> None:
+        """Collect metrics for a video file."""
         try:
-            motion_scores = []
-            for i in range(1, len(frames)):
-                diff = cv2.absdiff(frames[i-1], frames[i])
-                motion_score = np.mean(diff) / 255.0
-                motion_scores.append(motion_score)
-            return np.mean(motion_scores) < threshold
-        except Exception as e:
-            log_event(f"Error in low activity detection: {e}")
-            return False
+            size = os.path.getsize(file_path)
+            clip = mp.VideoFileClip(file_path)
+            duration = clip.duration
+            frames = int(duration * clip.fps)
+            clip.close()
 
-    def _process_phase3(self, phase2_files: List[str]) -> List[str]:
-        """Process low activity sections."""
-        processed_files = []
-        window_size = self.settings.get('search', {}).get('frame_settings', {}).get('batch_size', 30)
-        
-        for input_file in phase2_files:
-            output_path = os.path.join(self.work_dir, f"p3_{os.path.basename(input_file)}")
-            try:
-                frames = []
-                for frame in extract_frames_optimized(input_file):
-                    if frame is not None:
-                        frames.append(frame)
-                
-                low_activity_segments = []
-                
-                # Analyze in windows
-                for i in range(0, len(frames), window_size):
-                    window = frames[i:i+window_size]
-                    if len(window) == window_size and self._detect_low_activity(window):
-                        low_activity_segments.append((i, i+window_size))
-                
-                # Process video
-                clip = mp.VideoFileClip(input_file)
-                final_clip = self._apply_speed_to_low_activity(clip, low_activity_segments)
-                final_clip.write_videofile(output_path, codec='libx264')
-                processed_files.append(output_path)
-                
-                clip.close()
-                final_clip.close()
-                self.progress.update()
-                
-            except Exception as e:
-                log_event(f"Error in phase 3 processing for {input_file}: {e}")
-        
-        return processed_files
-
-    def _apply_speed_to_low_activity(self, clip: mp.VideoFileClip, 
-                                   low_activity_segments: List[Tuple[int, int]]) -> mp.VideoFileClip:
-        """Apply speed changes to low activity segments."""
-        try:
-            fps = clip.fps
-            segments = []
-            current_pos = 0
+            metrics = {
+                'size': size,
+                'duration': duration,
+                'frames': frames,
+                'fps': clip.fps,
+                'resolution': (clip.w, clip.h)
+            }
             
-            for start, end in low_activity_segments:
-                # Add normal speed segment before low activity
-                if start > current_pos:
-                    segments.append(clip.subclip(current_pos/fps, start/fps))
-                
-                # Speed up low activity segment
-                speed_factor = self.settings.get('speed_settings', {}).get('max_speed_factor', 4.0)
-                segments.append(clip.subclip(start/fps, end/fps).speedx(speed_factor))
-                current_pos = end
+            self.metrics_collector.update_file_metrics(file_path, metrics)
+            self.processed_files[file_path] = metrics
             
-            # Add remaining video
-            if current_pos / fps < clip.duration:
-                segments.append(clip.subclip(current_pos/fps))
-            
-            return mp.concatenate_videoclips(segments) if segments else clip
-            
-        except Exception as e:
-            log_event(f"Error applying speed to low activity: {e}")
-            return clip
-
-    def _detect_scene_change(self, frame1: np.ndarray, frame2: np.ndarray) -> bool:
-        """Detect scene changes between frames."""
-        try:
-            threshold = self.settings.get('scene_settings', {}).get('scene_threshold', 30.0)
-            hist1 = cv2.calcHist([frame1], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-            hist2 = cv2.calcHist([frame2], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
-            diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-            return diff > threshold
-        except Exception as e:
-            log_event(f"Error in scene change detection: {e}")
-            return False
-
-    def _detect_action_sequence(self, frames: List[np.ndarray]) -> bool:
-        """Detect action sequences based on motion and color changes."""
-        try:
-            threshold = self.settings.get('scene_settings', {}).get('action_threshold', 0.3)
-            motion_scores = []
-            
-            for i in range(1, len(frames)):
-                diff = cv2.absdiff(frames[i-1], frames[i])
-                motion_score = np.mean(diff) / 255.0
-                motion_scores.append(motion_score)
-            
-            return np.mean(motion_scores) > threshold
-        except Exception as e:
-            log_event(f"Error in action sequence detection: {e}")
-            return False
-
-    def _process_phase4(self, phase3_files: List[str], target_duration: float) -> List[str]:
-        """Scene detection and speed adjustment."""
-        processed_files = []
-        for input_file in phase3_files:
-            output_path = os.path.join(self.work_dir, f"p4_{os.path.basename(input_file)}")
-            try:
-                frames = []
-                for frame in extract_frames_optimized(input_file):
-                    if frame is not None:
-                        frames.append(frame)
-                
-                scenes = []
-                current_scene_start = 0
-                
-                # Detect scenes
-                for i in range(1, len(frames)):
-                    if self._detect_scene_change(frames[i-1], frames[i]):
-                        scenes.append({
-                            'start': current_scene_start,
-                            'end': i,
-                            'action': self._detect_action_sequence(frames[current_scene_start:i])
-                        })
-                        current_scene_start = i
-                
-                # Process scenes
-                clip = mp.VideoFileClip(input_file)
-                final_clips = []
-                
-                for scene in scenes:
-                    scene_clip = clip.subclip(scene['start']/30, scene['end']/30)
-                    if scene['action']:
-                        # Keep action sequences at normal speed
-                        final_clips.append(scene_clip)
-                    else:
-                        # Apply variable speed to non-action scenes
-                        duration = scene_clip.duration
-                        speed_factor = self._calculate_speed_factor(duration, target_duration, len(scenes))
-                        final_clips.append(scene_clip.speedx(speed_factor))
-                
-                # Create final video
-                if final_clips:
-                    final_clip = mp.concatenate_videoclips(final_clips)
-                    final_clip.write_videofile(output_path, codec='libx264')
-                    processed_files.append(output_path)
-                    
-                    # Cleanup
-                    final_clip.close()
-                    for c in final_clips:
-                        c.close()
-                
-                clip.close()
-                self.progress.update()
-                
-            except Exception as e:
-                log_event(f"Error in phase 4 processing for {input_file}: {e}")
-        
-        return processed_files
-
-    def _calculate_speed_factor(self, scene_duration: float, target_duration: float, total_scenes: int) -> float:
-        """Calculate speed factor for scene based on target duration."""
-        try:
-            max_speed = self.settings.get('speed_settings', {}).get('max_speed_factor', 4.0)
-            min_speed = self.settings.get('speed_settings', {}).get('min_speed_factor', 1.0)
-            
-            # Calculate base speed factor
-            base_factor = scene_duration / (target_duration / total_scenes)
-            
-            # Clamp between min and max speed
-            return max(min_speed, min(max_speed, base_factor))
-            
-        except Exception as e:
-            log_event(f"Error calculating speed factor: {e}")
-            return 1.0
-
-    def _compile_final_video(self, processed_files: List[str], output_dir: str) -> str:
-        """Compile all processed videos into final output."""
-        final_output = os.path.join(output_dir, "final_output.mp4")
-        try:
-            # Load all clips
-            clips = [mp.VideoFileClip(f) for f in processed_files]
-            
-            if not clips:
-                log_event("No clips to concatenate")
-                return ""
-            
-            # Get final video settings
-            target_fps = self.video_config.get('video_settings', {}).get('target_fps', 30)
-            codec = self.video_config.get('video_settings', {}).get('codec', 'libx264')
-            audio_codec = self.video_config.get('video_settings', {}).get('audio_codec', 'aac')
-            
-            # Create and write final video
-            final_clip = mp.concatenate_videoclips(clips)
-            final_clip.write_videofile(
-                final_output,
-                fps=target_fps,
-                codec=codec,
-                audio_codec=audio_codec
+            log_event(
+                f"File metrics - {os.path.basename(file_path)}: "
+                f"Duration={duration:.2f}s, Size={size/(1024*1024):.2f}MB, Frames={frames}",
+                "INFO", 
+                "METRICS"
             )
-            
-            # Cleanup
-            final_clip.close()
-            for clip in clips:
-                clip.close()
-            
-            self.progress.update()
-            log_event(f"Final video compiled: {final_output}")
-            return final_output
-            
+                     
         except Exception as e:
-            log_event(f"Error compiling final video: {e}")
-            return ""
+            log_event(f"Error collecting metrics for {file_path}: {e}", "ERROR", "METRICS")
 
-# Create processor instance
-processor = VideoProcessor()
+class LogManager:
+    """Enhanced logging system with categories and levels."""
+    def __init__(self, log_file: str):
+        self.log_file = log_file
+        self.log_levels = {
+            'DEBUG': 0,
+            'INFO': 1,
+            'WARNING': 2,
+            'ERROR': 3
+        }
+        self.current_level = 'INFO'
+        self._ensure_log_file()
 
-def process_videos(input_dir: str, output_dir: str) -> None:
-    """Main entry point for video processing."""
-    processor.process_videos(input_dir, output_dir)
+    def _ensure_log_file(self) -> None:
+        """Ensure log file exists and is ready."""
+        if not os.path.exists(os.path.dirname(self.log_file)):
+            os.makedirs(os.path.dirname(self.log_file))
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, 'w') as f:
+                f.write(f"Log initialized: {datetime.datetime.now()}\n")
 
-def process_video(input_path: str, output_path: str) -> Optional[str]:
-    """Process a single video file."""
+    def log(self, message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
+        """Log a message with level and category."""
+        if self.log_levels.get(level, 0) >= self.log_levels.get(self.current_level, 0):
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"[{timestamp}] [{level}] [{category}] {message}"
+            
+            try:
+                with open(self.log_file, 'a') as f:
+                    f.write(log_entry + '\n')
+            except Exception as e:
+                print(f"Error writing to log: {e}")
+                print(log_entry)
+
+    def get_recent_logs(self, num_lines: int = 20, level: str = None, 
+                       category: str = None) -> List[str]:
+        """Get recent log entries with optional filtering."""
+        try:
+            with open(self.log_file, 'r') as f:
+                lines = f.readlines()
+            
+            filtered_lines = []
+            for line in reversed(lines):
+                if level and f"[{level}]" not in line:
+                    continue
+                if category and f"[{category}]" not in line:
+                    continue
+                filtered_lines.append(line.strip())
+                if len(filtered_lines) >= num_lines:
+                    break
+                    
+            return list(reversed(filtered_lines))
+        except Exception as e:
+            return [f"Error reading logs: {e}"]
+
+    def clear_logs(self) -> None:
+        """Clear the log file."""
+        try:
+            with open(self.log_file, 'w') as f:
+                f.write(f"Log cleared: {datetime.datetime.now()}\n")
+        except Exception as e:
+            print(f"Error clearing logs: {e}")
+
+class ProgressTracker:
+    def __init__(self, total_steps: int):
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.start_time = datetime.datetime.now()
+        self.phase = "Initializing"
+        self.metrics_collector = MetricsCollector()
+        
+    def update(self, step: int = 1, phase: Optional[str] = None) -> None:
+        """Update progress and optionally change phase."""
+        self.current_step += step
+        if phase:
+            self.phase = phase
+            self.metrics_collector.start_phase_timing(phase)
+        self._log_progress()
+        
+    def _log_progress(self) -> None:
+        """Log progress update with memory usage."""
+        progress = (self.current_step / self.total_steps) * 100
+        elapsed = datetime.datetime.now() - self.start_time
+        memory = psutil.Process().memory_info().rss
+        self.metrics_collector.update_processing_metrics(1, memory)
+        log_event(
+            f"Progress: {progress:.1f}% - Phase: {self.phase} - "
+            f"Elapsed: {elapsed} - Memory: {memory/(1024*1024):.1f}MB",
+            "INFO",
+            "PROGRESS"
+        )
+        
+    def get_progress(self) -> Dict[str, Any]:
+        """Get current progress information."""
+        return {
+            "progress": (self.current_step / self.total_steps) * 100,
+            "phase": self.phase,
+            "elapsed": str(datetime.datetime.now() - self.start_time),
+            "metrics": self.metrics_collector.get_metrics_report()
+        }
+
+def monitor_memory_usage(threshold_mb: float = 1000.0) -> None:
+    """Monitor memory usage and log warnings if threshold exceeded."""
     try:
-        processor.process_videos(os.path.dirname(input_path), os.path.dirname(output_path))
-        return output_path
+        current_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # Convert to MB
+        if current_memory > threshold_mb:
+            log_event(
+                f"High memory usage detected: {current_memory:.1f}MB",
+                "WARNING",
+                "MEMORY"
+            )
+            return True
+        return False
     except Exception as e:
-        log_event(f"Error processing single video: {e}")
-        return None
+        log_event(f"Error monitoring memory: {e}", "ERROR", "MEMORY")
+        return False
+
+# Initialize the log manager
+log_manager = LogManager(os.path.join("data", "events.txt"))
+
+def log_event(message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
+    """Enhanced logging function using LogManager."""
+    log_manager.log(message, level, category)
+
+def load_hardware_config() -> Dict[str, bool]:
+    """Load hardware configuration from hardware.txt."""
+    hardware_file = os.path.join("data", "hardware.txt")
+    hardware_config = {
+        "x64": False,
+        "Avx2": False,
+        "Aocl": False,
+        "OpenCL": False,
+    }
+    try:
+        with open(hardware_file, "r") as f:
+            for line in f:
+                key, value = line.strip().split(": ")
+                hardware_config[key] = value.lower() == "true"
+        log_event("Hardware configuration loaded successfully", "INFO", "CONFIG")
+    except Exception as e:
+        log_event(f"Error loading hardware config: {e}", "ERROR", "CONFIG")
+    return hardware_config
+
+def load_settings() -> Dict[str, Any]:
+    """Load settings from temporary.py."""
+    try:
+        from data.temporary import SEARCH_CRITERIA, HARDWARE_CONFIG, VIDEO_CONFIG
+        log_event("Settings loaded from temporary.py", "INFO", "CONFIG")
+        return {
+            "search": SEARCH_CRITERIA,
+            "hardware": HARDWARE_CONFIG,
+            "video": VIDEO_CONFIG
+        }
+    except Exception as e:
+        log_event(f"Error loading settings: {e}", "ERROR", "CONFIG")
+        return {}
+
+def initialize_opencl_with_fallback() -> Tuple[Any, Any, str]:
+    """Initialize OpenCL with robust fallback mechanism."""
+    try:
+        platforms = cl.get_platforms()
+        settings = load_settings()
+        preferred_platforms = settings.get('hardware', {}).get('opencl_platform_preference', ['NVIDIA', 'AMD', 'Intel'])
+        
+        # Try preferred platforms in order
+        for pref in preferred_platforms:
+            for platform in platforms:
+                if pref.lower() in platform.name.lower():
+                    try:
+                        devices = platform.get_devices()
+                        context = cl.Context(devices)
+                        queue = cl.CommandQueue(context)
+                        log_event(f"OpenCL initialized using {platform.name}", "INFO", "HARDWARE")
+                        return context, queue, platform.name
+                    except Exception:
+                        continue
+        
+        # Try any available platform
+        if platforms:
+            try:
+                platform = platforms[0]
+                devices = platform.get_devices()
+                context = cl.Context(devices)
+                queue = cl.CommandQueue(context)
+                log_event(f"OpenCL initialized using fallback platform: {platform.name}", "INFO", "HARDWARE")
+                return context, queue, platform.name
+            except Exception:
+                pass
+        
+        log_event("OpenCL initialization failed, falling back to CPU", "WARNING", "HARDWARE")
+        return None, None, "CPU"
+        
+    except Exception as e:
+        log_event(f"OpenCL initialization failed: {e}", "ERROR", "HARDWARE")
+        return None, None, "CPU"
+
+def get_video_files(directory: str) -> List[str]:
+    """Get list of video files from directory."""
+    settings = load_settings()
+    supported_formats = settings.get('video', {}).get('supported_formats', ['.mp4', '.avi', '.mkv'])
+    
+    try:
+        video_files = [
+            os.path.join(directory, f) for f in os.listdir(directory)
+            if os.path.splitext(f)[1].lower() in supported_formats
+        ]
+        log_event(f"Found {len(video_files)} video files in {directory}", "INFO", "FILES")
+        return sorted(video_files)
+    except Exception as e:
+        log_event(f"Error listing video files: {e}", "ERROR", "FILES")
+        return []
+
+def get_video_duration(file_path: str) -> float:
+    """Get duration of video file."""
+    try:
+        clip = mp.VideoFileClip(file_path)
+        duration = clip.duration
+        clip.close()
+        return duration
+    except Exception as e:
+        log_event(f"Error getting video duration for {file_path}: {e}", "ERROR", "FILES")
+        return 0.0
+
+def extract_frames_optimized(video_path: str, frame_interval: int = 1) -> Generator[np.ndarray, None, None]:
+    """Memory-optimized frame extraction using generator."""
+    try:
+        cap = cv2.VideoCapture(video_path)
+        frame_count = 0
+        memory_usage = psutil.Process().memory_info().rss
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            if frame_count % frame_interval == 0:
+                yield frame
+            frame_count += 1
+            
+            # Monitor memory usage
+                current_memory = psutil.Process().memory_info().rss
+                if current_memory > memory_usage * 1.5:
+                    log_event(f"High memory usage detected: {current_memory/(1024*1024):.1f}MB", "WARNING", "MEMORY")
+            
+        cap.release()
+        log_event(f"Extracted frames from {video_path} with interval {frame_interval}", "INFO", "PROCESSING")
+        
+    except Exception as e:
+        log_event(f"Frame extraction failed for {video_path}: {e}", "ERROR", "PROCESSING")
+        yield None
+
+def batch_process_frames(frames: List[np.ndarray], batch_size: int, process_func: Any, **kwargs) -> List[Any]:
+    """Process frames in batches to optimize memory usage."""
+    results = []
+    memory_start = psutil.Process().memory_info().rss
+    
+    for i in range(0, len(frames), batch_size):
+        batch = frames[i:i+batch_size]
+        batch_results = [process_func(frame, **kwargs) for frame in batch]
+        results.extend(batch_results)
+        
+        # Monitor memory
+        current_memory = psutil.Process().memory_info().rss
+        if current_memory > memory_start * 1.5:
+            log_event(f"High memory usage in batch processing: {current_memory/(1024*1024):.1f}MB", "WARNING", "MEMORY")
+            
+    return results
+
+def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """Detect motion between frames using OpenCL."""
+    try:
+        context, queue, platform_name = initialize_opencl_with_fallback()
+        if not context:
+            return detect_motion_cpu(frame1, frame2, threshold)
+            
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        
+        mf = cl.mem_flags
+        gray1_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=gray1)
+        gray2_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=gray2)
+        diff_buf = cl.Buffer(context, mf.WRITE_ONLY, gray1.nbytes)
+        
+        kernel_code = """
+        __kernel void detect_motion(
+            __global const uchar* gray1,
+            __global const uchar* gray2,
+            __global uchar* diff
+        ) {
+            int gid = get_global_id(0);
+            diff[gid] = (uchar)abs((int)gray1[gid] - (int)gray2[gid]);
+        }
+        """
+        
+        program = cl.Program(context, kernel_code).build()
+        program.detect_motion(queue, gray1.shape, None, gray1_buf, gray2_buf, diff_buf)
+        
+        diff = np.empty_like(gray1)
+        cl.enqueue_copy(queue, diff, diff_buf)
+        motion_score = np.mean(diff) / 255.0
+        
+        return motion_score > threshold
+        
+    except Exception as e:
+        log_event(f"OpenCL motion detection failed: {e}", "ERROR", "PROCESSING")
+        return detect_motion_cpu(frame1, frame2, threshold)
+
+def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """Detect motion between frames using CPU."""
+    try:
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        diff = cv2.absdiff(gray1, gray2)
+        _, diff = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+        motion_score = np.mean(diff) / 255.0
+        return motion_score > threshold
+    except Exception as e:
+        log_event(f"CPU motion detection failed: {e}", "ERROR", "PROCESSING")
+        return False
+
+def detect_texture_change(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """Detect texture changes between frames."""
+    try:
+        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        
+        hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
+        hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
+        
+        texture_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
+        return texture_score > threshold
+    except Exception as e:
+        log_event(f"Texture detection failed: {e}", "ERROR", "PROCESSING")
+        return False
+
+def analyze_segment(frame1: np.ndarray, frame2: np.ndarray) -> bool:
+    """Analyze segment for motion or texture changes."""
+    try:
+        settings = load_settings()
+        search_criteria = settings.get('search', {})
+        
+        motion_threshold = search_criteria.get('motion_threshold', 0.5)
+        texture_threshold = search_criteria.get('texture_threshold', 0.6)
+        
+        hardware_config = load_hardware_config()
+        if hardware_config["OpenCL"]:
+            motion = detect_motion_opencl(frame1, frame2, motion_threshold)
+        else:
+            motion = detect_motion_cpu(frame1, frame2, motion_threshold)
+            
+        texture = detect_texture_change(frame1, frame2, texture_threshold)
+        return motion or texture
+        
+    except Exception as e:
+        log_event(f"Segment analysis failed: {e}", "ERROR", "PROCESSING")
+        return False
+
+def extract_frames(video_path: str) -> List[np.ndarray]:
+    """Extract frames from video at specified frame rate."""
+    try:
+        settings = load_settings()
+        frame_rate = settings.get('search', {}).get('frame_settings', {}).get('sample_rate', 30)
+        
+        frames = list(extract_frames_optimized(video_path, frame_rate))
+        log_event(f"Extracted {len(frames)} frames from {video_path}", "INFO", "PROCESSING")
+        return frames
+        
+    except Exception as e:
+        log_event(f"Frame extraction failed for {video_path}: {e}", "ERROR", "PROCESSING")
+        return []
+
+def cleanup_work_directory() -> None:
+    """Clean up temporary files in work directory."""
+    try:
+        work_dir = "work"
+        for filename in os.listdir(work_dir):
+            file_path = os.path.join(work_dir, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+        log_event("Work directory cleaned", "INFO", "CLEANUP")
+    except Exception as e:
+        log_event(f"Work directory cleanup failed: {e}", "ERROR", "CLEANUP")

@@ -1,7 +1,8 @@
 # .\launcher.py
 
-import os, sys, json
-from data.temporary import SEARCH_CRITERIA, VIDEO_CONFIG, HARDWARE_CONFIG
+import os
+import sys
+import json
 from typing import Dict, Any
 from utility import (
     load_hardware_config,
@@ -9,16 +10,15 @@ from utility import (
     log_event,
     cleanup_work_directory
 )
-from scripts.generate import process_videos, process_video
+from scripts.process import VideoProcessor
 from scripts.interface import launch_gradio_interface
 
 class MovieConsolidator:
     def __init__(self):
         self.settings = load_settings()
         self.hardware_config = load_hardware_config()
-        self.search_criteria = self.settings.get('search', {})
-        self.video_config = self.settings.get('video', {})
         self.validate_environment()
+        self.processor = VideoProcessor()
 
     def validate_environment(self) -> None:
         """Validate the program environment."""
@@ -57,23 +57,7 @@ class MovieConsolidator:
         else:
             print("Using standard CPU processing")
 
-    def process_directory(self, input_dir: str, output_dir: str) -> None:
-        """Process all videos in a directory."""
-        try:
-            if not os.path.exists(input_dir):
-                raise FileNotFoundError(f"Input directory not found: {input_dir}")
-                
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-                
-            log_event(f"Starting batch processing: {input_dir} -> {output_dir}")
-            process_videos(input_dir, output_dir)
-            
-        except Exception as e:
-            log_event(f"Directory processing failed: {e}")
-            cleanup_work_directory()
-
-    def process_single_file(self, input_path: str, output_path: str) -> None:
+    def process_file(self, input_path: str, output_path: str, target_duration: float) -> None:
         """Process a single video file."""
         try:
             if not os.path.exists(input_path):
@@ -83,11 +67,16 @@ class MovieConsolidator:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
                 
-            log_event(f"Processing single file: {input_path} -> {output_path}")
-            process_video(input_path, output_path)
+            log_event(f"Processing file: {input_path} -> {output_path}")
+            result = self.processor.process_video(input_path, output_path, target_duration)
             
+            if result:
+                log_event("Processing completed successfully")
+            else:
+                log_event("Processing failed", "ERROR", "PROCESSING")
+                
         except Exception as e:
-            log_event(f"Single file processing failed: {e}")
+            log_event(f"File processing failed: {e}", "ERROR", "PROCESSING")
             cleanup_work_directory()
 
 def main():
@@ -105,24 +94,18 @@ def main():
             # Command line mode
             if sys.argv[1] == "--gui":
                 launch_gradio_interface()
-            elif len(sys.argv) == 3:
-                # Process single directory
-                input_dir = sys.argv[1]
-                output_dir = sys.argv[2]
-                consolidator.process_directory(input_dir, output_dir)
-            elif len(sys.argv) == 4 and sys.argv[1] == "--file":
-                # Process single file
-                input_path = sys.argv[2]
-                output_path = sys.argv[3]
-                consolidator.process_single_file(input_path, output_path)
+            elif len(sys.argv) == 4:
+                # Process single file with target duration in minutes
+                input_path = sys.argv[1]
+                output_path = sys.argv[2]
+                target_duration = float(sys.argv[3]) * 60  # Convert minutes to seconds
+                consolidator.process_file(input_path, output_path, target_duration)
             else:
                 print("\nUsage:")
                 print("  Launch GUI:")
                 print("    python launcher.py --gui")
-                print("  Process directory:")
-                print("    python launcher.py input_dir output_dir")
                 print("  Process single file:")
-                print("    python launcher.py --file input_path output_path")
+                print("    python launcher.py input_path output_path target_duration_minutes")
         else:
             # Default to GUI mode
             launch_gradio_interface()
