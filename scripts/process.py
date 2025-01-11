@@ -24,7 +24,33 @@ class VideoProcessor:
         self.metrics = MetricsCollector()
         self.progress = None
         self.active_process = False
-        self.analyzer = VideoAnalyzer()  # Add analyzer instance
+        self.analyzer = VideoAnalyzer()
+
+    def fast_forward_static_sections(self, clip: mp.VideoFileClip, scene_data: Dict[str, Any]) -> mp.VideoFileClip:
+        """Fast-forward static or low-activity sections."""
+        try:
+            segments = []
+            fps = clip.fps
+            
+            for scene in scene_data['scenes']:
+                start_time = scene['start_frame'] / fps
+                end_time = scene['end_frame'] / fps
+                
+                if scene['is_static'] or scene['is_low_activity']:
+                    subclip = clip.subclip(start_time, end_time)
+                    subclip = subclip.speedx(2.0)  # Fast-forward at 2x speed
+                    log_event(f"Fast-forwarding static/low-activity segment at {start_time:.2f}s", 
+                            "INFO", "SPEED")
+                else:
+                    subclip = clip.subclip(start_time, end_time)
+                
+                segments.append(subclip)
+            
+            return mp.concatenate_videoclips(segments) if segments else clip
+            
+        except Exception as e:
+            log_event(f"Error fast-forwarding static sections: {e}", "ERROR", "SPEED")
+            return clip
 
     def create_speed_transition(self, clip: mp.VideoFileClip, start_speed: float, 
                               end_speed: float, duration: float) -> mp.VideoFileClip:
@@ -71,7 +97,7 @@ class VideoProcessor:
             return ""
 
     def apply_speed_changes(self, clip: mp.VideoFileClip, scene_data: Dict[str, Any], 
-                          target_duration: float) -> mp.VideoFileClip:
+                            target_duration: float) -> mp.VideoFileClip:
         """Apply speed changes based on scene analysis."""
         try:
             segments = []
@@ -80,6 +106,7 @@ class VideoProcessor:
             for scene in scene_data['scenes']:
                 start_time = scene['start_frame'] / fps
                 end_time = scene['end_frame'] / fps
+                scene_duration = end_time - start_time
                 
                 if scene['is_static']:
                     log_event(f"Skipping static segment at {start_time:.2f}s", 
@@ -91,47 +118,30 @@ class VideoProcessor:
                 # Get total video duration for relative speed calculation
                 total_duration = clip.duration
                 scene_position = (start_time + end_time) / (2 * total_duration)
-                duration = end_time - start_time
-
-                if scene['is_menu']:
-                    subclip = subclip.speedx(2.0)
-                    log_event(f"Speeding up menu segment at {start_time:.2f}s", 
-                            "INFO", "SPEED")
-                elif scene['is_action']:
-                    # Keep action scenes at normal speed but add transitions
-                    if segments and hasattr(segments[-1], 'current_speed'):
-                        transition_in = self.create_speed_transition(
-                            subclip.subclip(0, 1),
-                            segments[-1].current_speed,
-                            1.0,
-                            1.0
+                
+                # Calculate speed factor
+                speed_factor = self.analyzer.calculate_speed_factor(
+                    scene_duration, total_duration, target_duration, 
+                    scene_position, scene['is_action'], scene['is_menu']
+                )
+                
+                # Apply speed change with smooth transitions
+                if segments and hasattr(segments[-1], 'current_speed'):
+                    prev_speed = segments[-1].current_speed
+                    if abs(prev_speed - speed_factor) > 0.5:  # Only transition for significant changes
+                        transition = self.create_speed_transition(
+                            subclip.subclip(0, 1),  # First second of the scene
+                            prev_speed,
+                            speed_factor,
+                            1.0  # Transition duration (1 second)
                         )
-                        subclip = mp.concatenate_videoclips([transition_in, subclip.subclip(1)])
-                    segments.append(subclip)
-                else:
-                    # Calculate and apply speed factor
-                    speed_factor = self.analyzer.calculate_speed_factor(
-                        duration, total_duration, target_duration, 
-                        scene_position, scene['is_action']
-                    )
-                    
-                    # Create transitions if needed
-                    if segments and hasattr(segments[-1], 'current_speed'):
-                        prev_speed = segments[-1].current_speed
-                        if abs(prev_speed - speed_factor) > 0.5:  # Only transition for significant changes
-                            transition = self.create_speed_transition(
-                                subclip.subclip(0, 1),
-                                prev_speed,
-                                speed_factor,
-                                1.0
-                            )
-                            subclip = mp.concatenate_videoclips([transition, subclip.subclip(1)])
-                    
-                    # Apply speed change
-                    subclip = subclip.speedx(speed_factor)
-                    subclip.current_speed = speed_factor  # Store current speed for transitions
-                    log_event(f"Applied {speed_factor:.2f}x speed to segment", 
-                            "INFO", "SPEED")
+                        subclip = mp.concatenate_videoclips([transition, subclip.subclip(1)])
+                
+                # Apply speed change
+                subclip = subclip.speedx(speed_factor)
+                subclip.current_speed = speed_factor  # Store current speed for transitions
+                log_event(f"Applied {speed_factor:.2f}x speed to segment", 
+                        "INFO", "SPEED")
                 
                 segments.append(subclip)
             

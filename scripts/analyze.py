@@ -106,7 +106,7 @@ class VideoAnalyzer:
 
     def calculate_speed_factor(self, scene_duration: float, total_duration: float, 
                              target_duration: float, scene_position: float,
-                             is_action: bool) -> float:
+                             is_action: bool, is_menu: bool) -> float:
         """Calculate appropriate speed factor for a scene."""
         try:
             speed_settings = self.settings.get('speed_settings', {})
@@ -115,6 +115,8 @@ class VideoAnalyzer:
             
             if is_action:
                 return 1.0  # Keep action scenes at normal speed
+            if is_menu:
+                return 2.0  # Fast-forward menu screens
             
             # Calculate required overall speed factor
             overall_speed_needed = total_duration / target_duration

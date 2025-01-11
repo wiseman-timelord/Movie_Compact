@@ -76,6 +76,12 @@ class GradioInterface:
             return "No active processing."
         return self.metrics.get_metrics_report()
 
+    def update_progress_display(self) -> Dict[str, Any]:
+        """Get current progress for display."""
+        if not self.active_process:
+            return {"progress": 0, "phase": "Idle", "elapsed": "0:00:00"}
+        return self.progress.get_progress()
+
     def get_video_info(self, video_path: str) -> Tuple[str, float]:
         """Get information about the selected video."""
         try:
