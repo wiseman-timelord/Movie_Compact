@@ -60,9 +60,10 @@ A program that generates condensed, action-packed summaries of gaming videos usi
 ├── README.md             # Project documentation
 ├── main_script.py        # Main program script
 ├── scripts\
-│   ├── interface.py     # Gradio Interface
-│   ├── generate.py      # Video processing and summarization
-│   ├── utility.py       # Helper functions for analysis
+│   ├── interface.py     # Gradio Interface & display code
+│   ├── analyze.py      # Video analysis
+│   ├── process.py      # Video processing
+│   ├── utility.py       # Helper functions
 
 ```
 
