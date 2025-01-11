@@ -31,8 +31,6 @@ The launcher.py script is the main entry point. It loads hardware configuration,
 
 Lastly, the MovieConsolidate.bat script manages the environment setup, checks for admin privileges, sets up a virtual environment, and provides a menu for installing requirements or running the summarization process. This is handy for users who prefer a batch file for managing the program.
 
-Potential challenges include ensuring compatibility across different hardware setups, optimizing performance for various systems, and handling edge cases in video processing like inconsistent frame rates or different codecs. Future enhancements might involve integrating AI for smarter scene selection, which could improve the summarization process.
-
 Overall, the program aims to streamline creating concise, action-packed video summaries, making it easier for users to produce high-quality content with minimal effort.
 ```
 
