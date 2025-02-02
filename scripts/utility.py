@@ -1,9 +1,325 @@
-# .\scripts\utility.py
+# utility.py
 
-import os, cv2, numpy as np, pyopencl as cl, json, datetime, sys, psutil
+import os
+import cv2
+import numpy as np
+import pyopencl as cl
+import json
+import datetime
+import sys
+import psutil
+import librosa
+import shutil
 from typing import Tuple, List, Dict, Any, Generator, Optional
 import moviepy.editor as mp
-from interface import HardwareError, ConfigurationError, MovieConsolidatorError
+from threading import Lock
+import time
+from interface import HardwareError, ConfigurationError, MovieCompactError
+
+class AudioAnalyzer:
+    """Handle audio analysis operations for scene detection."""
+    def __init__(self):
+        self.settings = load_settings()
+        self.threshold = self.settings.get('audio_threshold', 0.7)
+        self.sample_rate = self.settings.get('audio', {}).get('sample_rate', 44100)
+        self.window_size = self.settings.get('audio', {}).get('window_size', 2048)
+        self.hop_length = self.settings.get('audio', {}).get('hop_length', 512)
+
+    def extract_audio(self, video_path: str) -> np.ndarray:
+        """Extract audio from video file."""
+        try:
+            # Use moviepy to extract audio
+            video = mp.VideoFileClip(video_path)
+            if video.audio is None:
+                log_event("No audio track found in video", "WARNING", "AUDIO")
+                return np.array([])
+
+            # Extract audio as numpy array
+            audio = video.audio.to_soundarray()
+            video.close()
+
+            # Convert to mono if stereo
+            if len(audio.shape) > 1:
+                audio = np.mean(audio, axis=1)
+
+            return audio
+        except Exception as e:
+            log_event(f"Error extracting audio: {e}", "ERROR", "AUDIO")
+            return np.array([])
+
+    def detect_high_activity(self, audio: np.ndarray,
+                           window_size: Optional[int] = None) -> List[Tuple[float, float]]:
+        """Detect segments with high audio activity."""
+        try:
+            if audio.size == 0:
+                return []
+
+            if window_size is None:
+                window_size = self.window_size
+
+            # Calculate short-time energy
+            energy = librosa.feature.rms(
+                y=audio,
+                frame_length=window_size,
+                hop_length=self.hop_length
+            )[0]
+
+            # Normalize energy
+            energy = energy / np.max(energy)
+
+            # Find segments above threshold
+            active_segments = []
+            start = None
+            for i, e in enumerate(energy):
+                if e > self.threshold and start is None:
+                    start = i * self.hop_length / self.sample_rate
+                elif e <= self.threshold and start is not None:
+                    end = i * self.hop_length / self.sample_rate
+                    if end - start >= 0.1:  # Minimum segment duration
+                        active_segments.append((start, end))
+                    start = None
+
+            # Handle final segment
+            if start is not None:
+                end = len(audio) / self.sample_rate
+                if end - start >= 0.1:
+                    active_segments.append((start, end))
+
+            return active_segments
+        except Exception as e:
+            log_event(f"Error detecting audio activity: {e}", "ERROR", "AUDIO")
+            return []
+
+    def analyze_audio_features(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
+        """Extract detailed audio features for analysis."""
+        try:
+            features = {}
+            
+            # Spectral centroid
+            features['spectral_centroid'] = librosa.feature.spectral_centroid(
+                y=audio,
+                sr=self.sample_rate,
+                hop_length=self.hop_length
+            )[0]
+
+            # Spectral bandwidth
+            features['spectral_bandwidth'] = librosa.feature.spectral_bandwidth(
+                y=audio,
+                sr=self.sample_rate,
+                hop_length=self.hop_length
+            )[0]
+
+            # Root mean square energy
+            features['rmse'] = librosa.feature.rms(
+                y=audio,
+                hop_length=self.hop_length
+            )[0]
+
+            # Zero crossing rate
+            features['zero_crossing_rate'] = librosa.feature.zero_crossing_rate(
+                y=audio,
+                hop_length=self.hop_length
+            )[0]
+
+            return features
+        except Exception as e:
+            log_event(f"Error analyzing audio features: {e}", "ERROR", "AUDIO")
+            return {}
+
+class SceneManager:
+    """Manage scene detection and analysis."""
+    def __init__(self):
+        self.settings = load_settings()
+        self.scene_settings = self.settings.get('scene_settings', {})
+        self.min_scene_length = self.scene_settings.get('min_scene_length', 2)
+        self.max_scene_length = self.scene_settings.get('max_scene_length', 300)
+        self.threshold = self.scene_settings.get('threshold', 30.0)
+
+    def detect_scenes(self, frames: List[np.ndarray],
+                     audio_segments: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """Detect and analyze scenes combining visual and audio information."""
+        scenes = []
+        current_scene = None
+
+        for i in range(1, len(frames)):
+            # Check for scene change
+            if self.is_scene_change(frames[i-1], frames[i]):
+                if current_scene:
+                    scenes.append(self.finalize_scene(current_scene, frames, i-1))
+                current_scene = self.initialize_scene(i)
+
+            # Update current scene
+            if current_scene:
+                current_scene = self.update_scene(current_scene, frames[i], i)
+
+            # Force scene break if current scene is too long
+            if (current_scene and 
+                i - current_scene['start_frame'] > self.max_scene_length * 30):  # Assuming 30fps
+                scenes.append(self.finalize_scene(current_scene, frames, i))
+                current_scene = self.initialize_scene(i + 1)
+
+        # Add final scene
+        if current_scene:
+            scenes.append(self.finalize_scene(current_scene, frames, len(frames)-1))
+
+        # Merge short scenes
+        scenes = self.merge_short_scenes(scenes)
+
+        # Merge with audio information
+        scenes = self.merge_audio_info(scenes, audio_segments, len(frames))
+
+        return scenes
+
+    def is_scene_change(self, frame1: np.ndarray, frame2: np.ndarray) -> bool:
+        """Detect if there is a scene change between frames."""
+        try:
+            # Calculate color histogram difference
+            hist1 = cv2.calcHist([frame1], [0, 1, 2], None, [8, 8, 8],
+                               [0, 256, 0, 256, 0, 256])
+            hist2 = cv2.calcHist([frame2], [0, 1, 2], None, [8, 8, 8],
+                               [0, 256, 0, 256, 0, 256])
+            diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
+
+            # Calculate frame difference
+            frame_diff = cv2.absdiff(frame1, frame2)
+            diff_score = np.mean(frame_diff)
+
+            # Combined decision
+            return diff > self.threshold or diff_score > 30.0
+        except Exception as e:
+            log_event(f"Error in scene change detection: {e}", "ERROR", "SCENE")
+            return False
+
+    def initialize_scene(self, start_frame: int) -> Dict[str, Any]:
+        """Initialize a new scene."""
+        return {
+            'start_frame': start_frame,
+            'end_frame': None,
+            'is_action': False,
+            'is_menu': False,
+            'is_static': False,
+            'motion_score': 0.0,
+            'audio_activity': 0.0,
+            'frame_count': 0
+        }
+
+    def update_scene(self, scene: Dict[str, Any], frame: np.ndarray,
+                    frame_index: int) -> Dict[str, Any]:
+        """Update scene information with new frame."""
+        scene['frame_count'] += 1
+        scene['end_frame'] = frame_index
+
+        # Update motion score
+        if scene['frame_count'] > 1:
+            motion = detect_motion_opencl(frame, frame, 0.5)
+            scene['motion_score'] = (
+                (scene['motion_score'] * (scene['frame_count']-1) + float(motion)) /
+                scene['frame_count']
+            )
+
+        # Check for menu screens
+        if detect_menu_screen(frame):
+            scene['is_menu'] = True
+
+        return scene
+
+    def finalize_scene(self, scene: Dict[str, Any], frames: List[np.ndarray],
+                      end_frame: int) -> Dict[str, Any]:
+        """Finalize scene data and analysis."""
+        scene['end_frame'] = end_frame
+        scene['is_static'] = all(
+            detect_static_frame(frames[i], frames[i+1])
+            for i in range(scene['start_frame'], end_frame-1)
+        )
+        return scene
+
+    def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge scenes that are too short."""
+        if not scenes:
+            return scenes
+
+        merged = []
+        current = scenes[0]
+
+        for next_scene in scenes[1:]:
+            if (next_scene['start_frame'] - current['end_frame'] < 
+                self.min_scene_length * 30):  # Assuming 30fps
+                # Merge scenes
+                current['end_frame'] = next_scene['end_frame']
+                current['frame_count'] += next_scene['frame_count']
+                current['motion_score'] = (
+                    (current['motion_score'] * current['frame_count'] +
+                     next_scene['motion_score'] * next_scene['frame_count']) /
+                    (current['frame_count'] + next_scene['frame_count'])
+                )
+                current['is_action'] |= next_scene['is_action']
+                current['is_menu'] |= next_scene['is_menu']
+                current['is_static'] &= next_scene['is_static']
+            else:
+                merged.append(current)
+                current = next_scene
+
+        merged.append(current)
+        return merged
+
+    def merge_audio_info(self, scenes: List[Dict[str, Any]],
+                        audio_segments: List[Tuple[float, float]],
+                        total_frames: int) -> List[Dict[str, Any]]:
+        """Merge audio activity information into scene data."""
+        for scene in scenes:
+            start_time = scene['start_frame'] / total_frames
+            end_time = scene['end_frame'] / total_frames
+
+            # Calculate overlap with audio segments
+            overlap = 0.0
+            for a_start, a_end in audio_segments:
+                if a_start < end_time and a_end > start_time:
+                    overlap_start = max(start_time, a_start)
+                    overlap_end = min(end_time, a_end)
+                    overlap += overlap_end - overlap_start
+
+            scene['audio_activity'] = overlap / (end_time - start_time)
+            scene['is_action'] = (
+                scene['audio_activity'] > 0.3 or
+                scene['motion_score'] > 0.5
+            )
+
+        return scenes
+
+class PreviewGenerator:
+    """Handle preview video generation and management."""
+    def __init__(self):
+        self.settings = load_settings()
+        self.preview_height = self.settings.get('video_settings', {}).get('preview_height', 360)
+        self.work_dir = self.settings.get('video', {}).get('temp_directory', 'work')
+
+    def create_preview(self, input_path: str) -> str:
+        """Create lower resolution preview of video."""
+        preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
+
+        try:
+            clip = mp.VideoFileClip(input_path)
+            aspect_ratio = clip.w / clip.h
+            new_width = int(self.preview_height * aspect_ratio)
+
+            preview = clip.resize(height=self.preview_height, width=new_width)
+            preview.write_videofile(
+                preview_path,
+                codec='libx264',
+                audio_codec='aac',
+                preset='ultrafast',
+                threads=4
+            )
+
+            clip.close()
+            preview.close()
+
+            log_event(f"Created preview: {preview_path}", "INFO", "PREVIEW")
+            return preview_path
+
+        except Exception as e:
+            log_event(f"Error creating preview: {e}", "ERROR", "PREVIEW")
+            return ""
 
 class MetricsCollector:
     """Collect and track processing metrics."""
@@ -50,29 +366,41 @@ class MetricsCollector:
         report = []
         report.append("Processing Metrics Report")
         report.append("-" * 50)
-        
+
         # Overall metrics
         total_time = (datetime.datetime.now() - self.start_time).total_seconds()
         report.append(f"Total Processing Time: {total_time:.2f} seconds")
-        report.append(f"Total Duration Processed: {self.metrics['total_duration']:.2f} seconds")
-        report.append(f"Total Size Processed: {self.metrics['total_size'] / (1024*1024):.2f} MB")
+        report.append(
+            f"Total Duration Processed: {self.metrics['total_duration']:.2f} seconds")
+        report.append(
+            f"Total Size Processed: {self.metrics['total_size'] / (1024*1024):.2f} MB")
         report.append(f"Total Frames Processed: {self.metrics['processed_frames']}")
-        report.append(f"Peak Memory Usage: {self.metrics['memory_usage'] / (1024*1024):.2f} MB")
-        
+        report.append(
+            f"Peak Memory Usage: {self.metrics['memory_usage'] / (1024*1024):.2f} MB")
+
         # Phase timings
         report.append("\nPhase Timings:")
         for phase, timing in self.metrics['phase_timings'].items():
             if timing['duration'] is not None:
                 report.append(f"  {phase}: {timing['duration']:.2f} seconds")
-        
+
         # File metrics
         report.append("\nFile Details:")
         for file_path, metrics in self.metrics['file_metrics'].items():
             report.append(f"\n  {os.path.basename(file_path)}:")
             report.append(f"    Duration: {metrics.get('duration', 0):.2f} seconds")
-            report.append(f"    Size: {metrics.get('size', 0) / (1024*1024):.2f} MB")
+            report.append(
+                f"    Size: {metrics.get('size', 0) / (1024*1024):.2f} MB")
             report.append(f"    Frames: {metrics.get('frames', 0)}")
-        
+
+        # Performance metrics
+        if total_time > 0:
+            fps = self.metrics['processed_frames'] / total_time
+            report.append(f"\nProcessing Performance:")
+            report.append(f"  Average FPS: {fps:.2f}")
+            report.append(
+                f"  Processing Ratio: {self.metrics['total_duration']/total_time:.2f}x")
+
         return "\n".join(report)
 
 class FileProcessor:
@@ -104,8 +432,7 @@ class FileProcessor:
             clip = mp.VideoFileClip(file_path)
             duration = clip.duration
             frames = int(duration * clip.fps)
-            clip.close()
-
+            
             metrics = {
                 'size': size,
                 'duration': duration,
@@ -119,10 +446,13 @@ class FileProcessor:
             
             log_event(
                 f"File metrics - {os.path.basename(file_path)}: "
-                f"Duration={duration:.2f}s, Size={size/(1024*1024):.2f}MB, Frames={frames}",
-                "INFO", 
+                f"Duration={duration:.2f}s, Size={size/(1024*1024):.2f}MB, "
+                f"Frames={frames}",
+                "INFO",
                 "METRICS"
             )
+            
+            clip.close()
                      
         except Exception as e:
             log_event(f"Error collecting metrics for {file_path}: {e}", "ERROR", "METRICS")
@@ -138,15 +468,19 @@ class LogManager:
             'ERROR': 3
         }
         self.current_level = 'INFO'
+        self.lock = Lock()
         self._ensure_log_file()
 
     def _ensure_log_file(self) -> None:
         """Ensure log file exists and is ready."""
-        if not os.path.exists(os.path.dirname(self.log_file)):
-            os.makedirs(os.path.dirname(self.log_file))
-        if not os.path.exists(self.log_file):
-            with open(self.log_file, 'w') as f:
-                f.write(f"Log initialized: {datetime.datetime.now()}\n")
+        try:
+            if not os.path.exists(os.path.dirname(self.log_file)):
+                os.makedirs(os.path.dirname(self.log_file))
+            if not os.path.exists(self.log_file):
+                with open(self.log_file, 'w') as f:
+                    f.write(f"Log initialized: {datetime.datetime.now()}\n")
+        except Exception as e:
+            print(f"Error initializing log file: {e}")
 
     def log(self, message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
         """Log a message with level and category."""
@@ -154,47 +488,51 @@ class LogManager:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_entry = f"[{timestamp}] [{level}] [{category}] {message}"
             
-            try:
-                with open(self.log_file, 'a') as f:
-                    f.write(log_entry + '\n')
-            except Exception as e:
-                print(f"Error writing to log: {e}")
-                print(log_entry)
+            with self.lock:
+                try:
+                    with open(self.log_file, 'a') as f:
+                        f.write(log_entry + '\n')
+                except Exception as e:
+                    print(f"Error writing to log: {e}")
+                    print(log_entry)
 
-    def get_recent_logs(self, num_lines: int = 20, level: str = None, 
-                       category: str = None) -> List[str]:
+    def get_recent_logs(self, num_lines: int = 50, level: Optional[str] = None,
+                       category: Optional[str] = None) -> List[str]:
         """Get recent log entries with optional filtering."""
-        try:
-            with open(self.log_file, 'r') as f:
-                lines = f.readlines()
-            
-            filtered_lines = []
-            for line in reversed(lines):
-                if level and f"[{level}]" not in line:
-                    continue
-                if category and f"[{category}]" not in line:
-                    continue
-                filtered_lines.append(line.strip())
-                if len(filtered_lines) >= num_lines:
-                    break
-                    
-            return list(reversed(filtered_lines))
-        except Exception as e:
-            return [f"Error reading logs: {e}"]
+        with self.lock:
+            try:
+                with open(self.log_file, 'r') as f:
+                    lines = f.readlines()
+                
+                filtered_lines = []
+                for line in reversed(lines):
+                    if level and f"[{level}]" not in line:
+                        continue
+                    if category and f"[{category}]" not in line:
+                        continue
+                    filtered_lines.append(line.strip())
+                    if len(filtered_lines) >= num_lines:
+                        break
+                        
+                return list(reversed(filtered_lines))
+            except Exception as e:
+                return [f"Error reading logs: {e}"]
 
     def clear_logs(self) -> None:
         """Clear the log file."""
-        try:
-            with open(self.log_file, 'w') as f:
-                f.write(f"Log cleared: {datetime.datetime.now()}\n")
-        except Exception as e:
-            print(f"Error clearing logs: {e}")
+        with self.lock:
+            try:
+                with open(self.log_file, 'w') as f:
+                    f.write(f"Log cleared: {datetime.datetime.now()}\n")
+            except Exception as e:
+                print(f"Error clearing logs: {e}")
 
 class ProgressTracker:
+    """Track processing progress and status."""
     def __init__(self, total_steps: int):
         self.total_steps = total_steps
         self.current_step = 0
-        self.start_time = datetime.datetime.now()
+        self.start_time = time.time()
         self.phase = "Initializing"
         self.metrics_collector = MetricsCollector()
         
@@ -209,26 +547,31 @@ class ProgressTracker:
     def _log_progress(self) -> None:
         """Log progress update with memory usage."""
         progress = (self.current_step / self.total_steps) * 100
-        elapsed = datetime.datetime.now() - self.start_time
+        elapsed = time.time() - self.start_time
         memory = psutil.Process().memory_info().rss
+        
         self.metrics_collector.update_processing_metrics(1, memory)
         log_event(
             f"Progress: {progress:.1f}% - Phase: {self.phase} - "
-            f"Elapsed: {elapsed} - Memory: {memory/(1024*1024):.1f}MB",
+            f"Elapsed: {elapsed:.1f}s - Memory: {memory/(1024*1024):.1f}MB",
             "INFO",
             "PROGRESS"
         )
         
     def get_progress(self) -> Dict[str, Any]:
         """Get current progress information."""
+        elapsed = time.time() - self.start_time
+        progress = (self.current_step / self.total_steps) * 100
+        
         return {
-            "progress": (self.current_step / self.total_steps) * 100,
+            "progress": progress,
             "phase": self.phase,
-            "elapsed": str(datetime.datetime.now() - self.start_time),
+            "elapsed": f"{int(elapsed//3600):02d}:{int((elapsed%3600)//60):02d}:"
+                      f"{int(elapsed%60):02d}",
             "metrics": self.metrics_collector.get_metrics_report()
         }
 
-def monitor_memory_usage(threshold_mb: float = 1000.0) -> None:
+def monitor_memory_usage(threshold_mb: float = 1000.0) -> bool:
     """Monitor memory usage and log warnings if threshold exceeded."""
     try:
         current_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # Convert to MB
@@ -244,12 +587,16 @@ def monitor_memory_usage(threshold_mb: float = 1000.0) -> None:
         log_event(f"Error monitoring memory: {e}", "ERROR", "MEMORY")
         return False
 
-# Initialize the log manager
-log_manager = LogManager(os.path.join("data", "events.txt"))
-
-def log_event(message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
-    """Enhanced logging function using LogManager."""
-    log_manager.log(message, level, category)
+def cleanup_work_directory() -> None:
+    """Clean up temporary files in work directory."""
+    try:
+        work_dir = os.path.join("work")
+        if os.path.exists(work_dir):
+            shutil.rmtree(work_dir)
+            os.makedirs(work_dir)
+            log_event("Work directory cleaned", "INFO", "CLEANUP")
+    except Exception as e:
+        log_event(f"Error cleaning work directory: {e}", "ERROR", "CLEANUP")
 
 def load_hardware_config() -> Dict[str, bool]:
     """Load hardware configuration from hardware.txt."""
@@ -265,7 +612,7 @@ def load_hardware_config() -> Dict[str, bool]:
             for line in f:
                 key, value = line.strip().split(": ")
                 hardware_config[key] = value.lower() == "true"
-        log_event("Hardware configuration loaded successfully", "INFO", "CONFIG")
+        log_event("Hardware configuration loaded", "INFO", "CONFIG")
     except Exception as e:
         log_event(f"Error loading hardware config: {e}", "ERROR", "CONFIG")
     return hardware_config
@@ -284,228 +631,15 @@ def load_settings() -> Dict[str, Any]:
         log_event(f"Error loading settings: {e}", "ERROR", "CONFIG")
         return {}
 
-def initialize_opencl_with_fallback() -> Tuple[Any, Any, str]:
-    """Initialize OpenCL with robust fallback mechanism."""
+def log_event(message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
+    """Log an event to the event log file."""
+    log_file = os.path.join("data", "events.txt")
     try:
-        platforms = cl.get_platforms()
-        settings = load_settings()
-        preferred_platforms = settings.get('hardware', {}).get('opencl_platform_preference', ['NVIDIA', 'AMD', 'Intel'])
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] [{category}] {message}\n"
         
-        # Try preferred platforms in order
-        for pref in preferred_platforms:
-            for platform in platforms:
-                if pref.lower() in platform.name.lower():
-                    try:
-                        devices = platform.get_devices()
-                        context = cl.Context(devices)
-                        queue = cl.CommandQueue(context)
-                        log_event(f"OpenCL initialized using {platform.name}", "INFO", "HARDWARE")
-                        return context, queue, platform.name
-                    except Exception:
-                        continue
-        
-        # Try any available platform
-        if platforms:
-            try:
-                platform = platforms[0]
-                devices = platform.get_devices()
-                context = cl.Context(devices)
-                queue = cl.CommandQueue(context)
-                log_event(f"OpenCL initialized using fallback platform: {platform.name}", "INFO", "HARDWARE")
-                return context, queue, platform.name
-            except Exception:
-                pass
-        
-        log_event("OpenCL initialization failed, falling back to CPU", "WARNING", "HARDWARE")
-        return None, None, "CPU"
-        
+        with open(log_file, 'a') as f:
+            f.write(log_entry)
     except Exception as e:
-        log_event(f"OpenCL initialization failed: {e}", "ERROR", "HARDWARE")
-        return None, None, "CPU"
-
-def get_video_files(directory: str) -> List[str]:
-    """Get list of video files from directory."""
-    settings = load_settings()
-    supported_formats = settings.get('video', {}).get('supported_formats', ['.mp4', '.avi', '.mkv'])
-    
-    try:
-        video_files = [
-            os.path.join(directory, f) for f in os.listdir(directory)
-            if os.path.splitext(f)[1].lower() in supported_formats
-        ]
-        log_event(f"Found {len(video_files)} video files in {directory}", "INFO", "FILES")
-        return sorted(video_files)
-    except Exception as e:
-        log_event(f"Error listing video files: {e}", "ERROR", "FILES")
-        return []
-
-def get_video_duration(file_path: str) -> float:
-    """Get duration of video file."""
-    try:
-        clip = mp.VideoFileClip(file_path)
-        duration = clip.duration
-        clip.close()
-        return duration
-    except Exception as e:
-        log_event(f"Error getting video duration for {file_path}: {e}", "ERROR", "FILES")
-        return 0.0
-
-def extract_frames_optimized(video_path: str, frame_interval: int = 1) -> Generator[np.ndarray, None, None]:
-    """Memory-optimized frame extraction using generator."""
-    try:
-        cap = cv2.VideoCapture(video_path)
-        frame_count = 0
-        memory_usage = psutil.Process().memory_info().rss
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            if frame_count % frame_interval == 0:
-                yield frame
-            frame_count += 1
-            
-            # Monitor memory usage
-                current_memory = psutil.Process().memory_info().rss
-                if current_memory > memory_usage * 1.5:
-                    log_event(f"High memory usage detected: {current_memory/(1024*1024):.1f}MB", "WARNING", "MEMORY")
-            
-        cap.release()
-        log_event(f"Extracted frames from {video_path} with interval {frame_interval}", "INFO", "PROCESSING")
-        
-    except Exception as e:
-        log_event(f"Frame extraction failed for {video_path}: {e}", "ERROR", "PROCESSING")
-        yield None
-
-def batch_process_frames(frames: List[np.ndarray], batch_size: int, process_func: Any, **kwargs) -> List[Any]:
-    """Process frames in batches to optimize memory usage."""
-    results = []
-    memory_start = psutil.Process().memory_info().rss
-    
-    for i in range(0, len(frames), batch_size):
-        batch = frames[i:i+batch_size]
-        batch_results = [process_func(frame, **kwargs) for frame in batch]
-        results.extend(batch_results)
-        
-        # Monitor memory
-        current_memory = psutil.Process().memory_info().rss
-        if current_memory > memory_start * 1.5:
-            log_event(f"High memory usage in batch processing: {current_memory/(1024*1024):.1f}MB", "WARNING", "MEMORY")
-            
-    return results
-
-def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """Detect motion between frames using OpenCL."""
-    try:
-        context, queue, platform_name = initialize_opencl_with_fallback()
-        if not context:
-            return detect_motion_cpu(frame1, frame2, threshold)
-            
-        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        
-        mf = cl.mem_flags
-        gray1_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=gray1)
-        gray2_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=gray2)
-        diff_buf = cl.Buffer(context, mf.WRITE_ONLY, gray1.nbytes)
-        
-        kernel_code = """
-        __kernel void detect_motion(
-            __global const uchar* gray1,
-            __global const uchar* gray2,
-            __global uchar* diff
-        ) {
-            int gid = get_global_id(0);
-            diff[gid] = (uchar)abs((int)gray1[gid] - (int)gray2[gid]);
-        }
-        """
-        
-        program = cl.Program(context, kernel_code).build()
-        program.detect_motion(queue, gray1.shape, None, gray1_buf, gray2_buf, diff_buf)
-        
-        diff = np.empty_like(gray1)
-        cl.enqueue_copy(queue, diff, diff_buf)
-        motion_score = np.mean(diff) / 255.0
-        
-        return motion_score > threshold
-        
-    except Exception as e:
-        log_event(f"OpenCL motion detection failed: {e}", "ERROR", "PROCESSING")
-        return detect_motion_cpu(frame1, frame2, threshold)
-
-def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """Detect motion between frames using CPU."""
-    try:
-        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        diff = cv2.absdiff(gray1, gray2)
-        _, diff = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
-        motion_score = np.mean(diff) / 255.0
-        return motion_score > threshold
-    except Exception as e:
-        log_event(f"CPU motion detection failed: {e}", "ERROR", "PROCESSING")
-        return False
-
-def detect_texture_change(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """Detect texture changes between frames."""
-    try:
-        gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-        gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        
-        hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
-        hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
-        
-        texture_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-        return texture_score > threshold
-    except Exception as e:
-        log_event(f"Texture detection failed: {e}", "ERROR", "PROCESSING")
-        return False
-
-def analyze_segment(frame1: np.ndarray, frame2: np.ndarray) -> bool:
-    """Analyze segment for motion or texture changes."""
-    try:
-        settings = load_settings()
-        search_criteria = settings.get('search', {})
-        
-        motion_threshold = search_criteria.get('motion_threshold', 0.5)
-        texture_threshold = search_criteria.get('texture_threshold', 0.6)
-        
-        hardware_config = load_hardware_config()
-        if hardware_config["OpenCL"]:
-            motion = detect_motion_opencl(frame1, frame2, motion_threshold)
-        else:
-            motion = detect_motion_cpu(frame1, frame2, motion_threshold)
-            
-        texture = detect_texture_change(frame1, frame2, texture_threshold)
-        return motion or texture
-        
-    except Exception as e:
-        log_event(f"Segment analysis failed: {e}", "ERROR", "PROCESSING")
-        return False
-
-def extract_frames(video_path: str) -> List[np.ndarray]:
-    """Extract frames from video at specified frame rate."""
-    try:
-        settings = load_settings()
-        frame_rate = settings.get('search', {}).get('frame_settings', {}).get('sample_rate', 30)
-        
-        frames = list(extract_frames_optimized(video_path, frame_rate))
-        log_event(f"Extracted {len(frames)} frames from {video_path}", "INFO", "PROCESSING")
-        return frames
-        
-    except Exception as e:
-        log_event(f"Frame extraction failed for {video_path}: {e}", "ERROR", "PROCESSING")
-        return []
-
-def cleanup_work_directory() -> None:
-    """Clean up temporary files in work directory."""
-    try:
-        work_dir = "work"
-        for filename in os.listdir(work_dir):
-            file_path = os.path.join(work_dir, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-        log_event("Work directory cleaned", "INFO", "CLEANUP")
-    except Exception as e:
-        log_event(f"Work directory cleanup failed: {e}", "ERROR", "CLEANUP")
+        print(f"Error logging event: {e}")
+        print(log_entry)
