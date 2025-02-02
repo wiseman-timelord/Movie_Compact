@@ -18,7 +18,7 @@ The program is supposed to consolidate very large video clips into action-packed
     - Speed reduction for scene transitions
     - Real-time playback for action sequences
 6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
-7. ) Clean output ready for movie maker integration with titles/intro/credits.
+7. ) Clean output ready for example, clips to be loaded in movie maker for then the addition of titles/credits/intro/outro.
 
 ## Description
 A sophisticated video processing application that creates condensed, action-focused versions of gaming videos using advanced motion, texture, and audio analysis. Features a user-friendly Gradio interface with real-time progress tracking and comprehensive controls.
