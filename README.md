@@ -1,7 +1,16 @@
 # Movie_Compact
 Status: Alpha (Initial, Testing & Bugfixing, close to beta)
 
-### Plan...
+### Next Steps
+- Focus on completing core video processing functionality
+- Implement advanced scene detection
+- Add audio quality improvements
+- Develop validation system
+- Enhance user interface
+- Add automated testing
+- Optimize performance
+
+### Outline...
 The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
 1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
 1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
