@@ -68,7 +68,7 @@ A sophisticated video processing application that creates condensed, action-focu
 ## Notation
 Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
 
-## File Structure
+## Package Structure
 ```
 .\
 ├── README.md             # Project documentation
