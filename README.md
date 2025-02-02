@@ -3,22 +3,22 @@ Status: Alpha (Initial, Testing & Bugfixing, close to beta)
 
 ### Plan...
 The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
-1a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
-1b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
-2) Intelligent preview system that converts videos to 360p in the `work` folder, enabling fast frame analysis while maintaining full quality for final output. This dual-processing approach prevents memory overload.
-3) Static frame detection system that identifies and removes paused screens, menus, and message popups.
-4a) Smart fast-forwarding system for menu navigation scenes while preserving motion context.
-4b) Dynamic speed adjustment for low-activity sections, with configurable thresholds (default >10 seconds).
-5a) Real-time length tracking system that monitors video duration throughout processing.
-5b) Advanced scene detection that identifies content-similar sections.
-5c) Audio-based action detection system that identifies high-intensity sequences through noise analysis.
-5d) Variable speed processing system that dynamically adjusts playback speeds:
+1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
+1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
+2. Intelligent preview system that converts videos to 360p in the `work` folder, enabling fast frame analysis while maintaining full quality for final output. This dual-processing approach prevents memory overload.
+3. Static frame detection system that identifies and removes paused screens, menus, and message popups.
+4. a) Smart fast-forwarding system for menu navigation scenes while preserving motion context.
+4. b) Dynamic speed adjustment for low-activity sections, with configurable thresholds (default >10 seconds).
+5. a) Real-time length tracking system that monitors video duration throughout processing.
+5. b) Advanced scene detection that identifies content-similar sections.
+5. c) Audio-based action detection system that identifies high-intensity sequences through noise analysis.
+5. d) Variable speed processing system that dynamically adjusts playback speeds:
     - Normal speed at scene starts/ends
     - Gradual speed increase to scene midpoints
     - Speed reduction for scene transitions
     - Real-time playback for action sequences
-6) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
-7) Clean output ready for movie maker integration with titles/intro/credits.
+6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
+7. ) Clean output ready for movie maker integration with titles/intro/credits.
 
 ## Description
 A sophisticated video processing application that creates condensed, action-focused versions of gaming videos using advanced motion, texture, and audio analysis. Features a user-friendly Gradio interface with real-time progress tracking and comprehensive controls.
