@@ -3,7 +3,7 @@ Status: Alpha (Initial, Testing & Bugfixing, close to beta)
 
 ### Plan...
 ```
-The program successfully consolidates very large video clips into action-packed consolidated movie clips. The implementation includes:
+The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
 
 1a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
 
