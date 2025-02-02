@@ -83,8 +83,6 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
 
 ## Files Created
 ```
-├── scripts\
-│   ├── __init__.py    # Fixes script imports 
 ├── data\              # Configuration and logging
 │   ├── events.txt     # Progress and debug logs
 │   ├── temporary.py   # Runtime settings
