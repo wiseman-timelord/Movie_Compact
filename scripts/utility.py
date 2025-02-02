@@ -1,4 +1,4 @@
-# utility.py
+# .\scripts\utility.py
 
 import os
 import cv2
@@ -10,35 +10,425 @@ import sys
 import psutil
 import librosa
 import shutil
-from typing import Tuple, List, Dict, Any, Generator, Optional
-import moviepy.editor as mp
-from threading import Lock
+import gc
+from typing import Tuple, List, Dict, Any, Generator, Optional, Callable, Union
+from threading import Lock, Event
 import time
+from queue import Queue
 from interface import HardwareError, ConfigurationError, MovieCompactError
 
+class CoreUtilities:
+    """Core utilities and system management."""
+    
+    def __init__(self):
+        self.memory_manager = MemoryManager()
+        self.progress_monitor = ProgressMonitor()
+        self.error_handler = ErrorHandler()
+        self.settings = load_settings()
+
+class MemoryManager:
+    """Manage memory usage and cleanup."""
+    
+    def __init__(self, max_memory_usage: float = 0.8):
+        self.max_memory_usage = max_memory_usage
+        self.warning_threshold = 0.7
+        self.critical_threshold = 0.9
+        self._last_cleanup = 0
+        self.cleanup_interval = 60  # seconds
+
+    def check_memory(self) -> Dict[str, Union[bool, float]]:
+        """Check current memory usage and status."""
+        try:
+            process = psutil.Process()
+            memory_percent = process.memory_percent()
+            system_memory = psutil.virtual_memory()
+            
+            status = {
+                'safe': memory_percent <= (self.max_memory_usage * 100),
+                'warning': memory_percent > (self.warning_threshold * 100),
+                'critical': memory_percent > (self.critical_threshold * 100),
+                'usage_percent': memory_percent,
+                'available_gb': system_memory.available / (1024**3)
+            }
+            
+            if status['warning']:
+                log_event(f"High memory usage: {memory_percent:.1f}%", "WARNING", "MEMORY")
+            
+            return status
+        except Exception as e:
+            log_event(f"Error checking memory: {e}", "ERROR", "MEMORY")
+            return {'safe': False, 'warning': True, 'critical': False, 'usage_percent': 0, 'available_gb': 0}
+
+    def cleanup(self, force: bool = False) -> bool:
+        """Perform memory cleanup if needed or forced."""
+        current_time = time.time()
+        if force or (current_time - self._last_cleanup) > self.cleanup_interval:
+            try:
+                # Clear Python's internal cache
+                gc.collect()
+                
+                # Clear OpenCV cache
+                cv2.destroyAllWindows()
+                
+                # Reset last cleanup time
+                self._last_cleanup = current_time
+                
+                log_event("Memory cleanup performed", "INFO", "MEMORY")
+                return True
+            except Exception as e:
+                log_event(f"Error during memory cleanup: {e}", "ERROR", "MEMORY")
+                return False
+        return False
+
+    def optimize_for_large_file(self, file_size: int) -> Dict[str, Any]:
+        """Configure memory management for large files."""
+        available_mem = psutil.virtual_memory().available
+        chunk_size = min(file_size // 10, available_mem // 4)
+        
+        config = {
+            'chunk_size': chunk_size,
+            'max_chunks': max(1, available_mem // (chunk_size * 2)),
+            'buffer_size': min(64 * 1024 * 1024, chunk_size // 10),
+            'use_temp_files': file_size > available_mem // 2
+        }
+        
+        self.log_manager.log(
+            f"Memory config: chunk_size={chunk_size/1024/1024:.1f}MB, "
+            f"max_chunks={config['max_chunks']}, "
+            f"use_temp={config['use_temp_files']}",
+            "INFO",
+            "MEMORY"
+        )
+        
+        return config
+
+    def recover_from_error(self, error_type: str) -> bool:
+        """Attempt to recover from memory-related errors."""
+        if error_type == "MemoryError":
+            try:
+                # Force aggressive cleanup
+                self.cleanup(force=True)
+                
+                # Disable OpenCV optimizations
+                cv2.ocl.setUseOpenCL(False)
+                
+                # Clear OpenCV cache
+                cv2.destroyAllWindows()
+                
+                # Clear moviepy cache
+                if hasattr(mp.VideoFileClip, 'clear_cache'):
+                    mp.VideoFileClip.clear_cache()
+                
+                # Request garbage collection
+                gc.collect()
+                
+                self.log_manager.log(
+                    "Memory recovery performed",
+                    "INFO",
+                    "MEMORY"
+                )
+                return True
+                
+            except Exception as e:
+                self.error_handler.handle_error(e, "memory_recovery")
+                return False
+                
+        return False
+
+    def monitor_usage(self, threshold_mb: float = 1000.0,
+                     interval_seconds: float = 1.0) -> None:
+        """Monitor memory usage over time."""
+        import threading
+        
+        def _monitor():
+            while not self.stop_monitoring.is_set():
+                try:
+                    usage = self.check_memory()
+                    if usage['warning'] or usage['critical']:
+                        self.log_manager.log(
+                            f"High memory usage: {usage['usage_percent']:.1f}%",
+                            "WARNING" if usage['warning'] else "ERROR",
+                            "MEMORY"
+                        )
+                        if usage['critical']:
+                            self.cleanup(force=True)
+                    time.sleep(interval_seconds)
+                except Exception as e:
+                    self.error_handler.handle_error(e, "memory_monitoring")
+                    break
+        
+        self.stop_monitoring = threading.Event()
+        self.monitor_thread = threading.Thread(target=_monitor)
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+
+class ProgressMonitor:
+    """Monitor and report processing progress."""
+    
+    def __init__(self):
+        self.stages: List[Dict[str, Any]] = []
+        self.current_stage: Optional[str] = None
+        self.callbacks: List[Callable] = []
+        self.start_time = time.time()
+        self.stage_weights = {}
+        self._lock = Lock()
+
+    def register_callback(self, callback: Callable[[str, float, str], None]) -> None:
+        """Register a progress callback function."""
+        self.callbacks.append(callback)
+
+    def start_stage(self, stage: str, weight: float = 1.0) -> None:
+        """Start a new processing stage."""
+        with self._lock:
+            self.current_stage = stage
+            self.stages.append({
+                'name': stage,
+                'start_time': time.time(),
+                'progress': 0.0,
+                'complete': False
+            })
+            self.stage_weights[stage] = weight
+            self._notify_progress(stage, 0.0, f"Starting {stage}")
+
+    def update_progress(self, progress: float, message: str = "") -> None:
+        """Update progress for current stage."""
+        if not self.current_stage:
+            return
+            
+        with self._lock:
+            for stage in self.stages:
+                if stage['name'] == self.current_stage:
+                    stage['progress'] = progress
+                    break
+            
+            self._notify_progress(self.current_stage, progress, message)
+
+    def complete_stage(self, stage: str) -> None:
+        """Mark a stage as complete."""
+        with self._lock:
+            for s in self.stages:
+                if s['name'] == stage:
+                    s['complete'] = True
+                    s['end_time'] = time.time()
+                    break
+            
+            self._notify_progress(stage, 100.0, f"Completed {stage}")
+
+    def get_overall_progress(self) -> float:
+        """Calculate overall progress across all stages."""
+        total_weight = sum(self.stage_weights.values())
+        weighted_progress = 0.0
+        
+        for stage in self.stages:
+            stage_weight = self.stage_weights.get(stage['name'], 1.0)
+            weighted_progress += (stage['progress'] / 100.0) * (stage_weight / total_weight)
+        
+        return weighted_progress * 100.0
+
+    def _notify_progress(self, stage: str, progress: float, message: str) -> None:
+        """Notify all registered callbacks of progress update."""
+        for callback in self.callbacks:
+            try:
+                callback(stage, progress, message)
+            except Exception as e:
+                log_event(f"Error in progress callback: {e}", "ERROR", "PROGRESS")
+
+    def get_estimated_time(self) -> str:
+        """Get estimated time remaining based on progress."""
+        if not self.stages:
+            return "Unknown"
+            
+        overall_progress = self.get_overall_progress()
+        if overall_progress <= 0:
+            return "Calculating..."
+            
+        elapsed = time.time() - self.start_time
+        estimated_total = elapsed / (overall_progress / 100.0)
+        remaining = estimated_total - elapsed
+        
+        if remaining < 60:
+            return f"{int(remaining)} seconds"
+        elif remaining < 3600:
+            return f"{int(remaining/60)} minutes"
+        else:
+            hours = int(remaining/3600)
+            minutes = int((remaining % 3600)/60)
+            return f"{hours}h {minutes}m"
+
+class ErrorHandler:
+    """Handle and manage processing errors."""
+    
+    def __init__(self):
+        self.error_log: List[Dict[str, Any]] = []
+        self._lock = Lock()
+        self.max_retries = 3
+        self.retry_delay = 5  # seconds
+
+    def handle_error(self, error: Exception, context: str) -> Dict[str, Any]:
+        """Handle an error and determine recovery action."""
+        with self._lock:
+            error_info = {
+                'timestamp': datetime.datetime.now(),
+                'error': str(error),
+                'context': context,
+                'type': type(error).__name__,
+                'can_retry': self._can_retry(error),
+                'recovery_action': self._get_recovery_action(error)
+            }
+            
+            self.error_log.append(error_info)
+            log_event(f"Error in {context}: {str(error)}", "ERROR", error_info['type'])
+            
+            return error_info
+
+    def _can_retry(self, error: Exception) -> bool:
+        """Determine if operation can be retried."""
+        # List of retryable error types
+        retryable_errors = (IOError, TimeoutError, ConnectionError)
+        return isinstance(error, retryable_errors)
+
+    def _get_recovery_action(self, error: Exception) -> Optional[str]:
+        """Determine appropriate recovery action for error."""
+        if isinstance(error, MemoryError):
+            return "cleanup_memory"
+        elif isinstance(error, IOError):
+            return "retry_operation"
+        elif isinstance(error, ConfigurationError):
+            return "check_settings"
+        return None
+
+    def retry_operation(self, operation: Callable, max_retries: Optional[int] = None) -> Any:
+        """Retry an operation with exponential backoff."""
+        retries = 0
+        max_attempts = max_retries or self.max_retries
+        
+        while retries < max_attempts:
+            try:
+                return operation()
+            except Exception as e:
+                retries += 1
+                if retries >= max_attempts:
+                    raise
+                    
+                delay = self.retry_delay * (2 ** (retries - 1))
+                log_event(f"Retry {retries}/{max_attempts} after {delay}s", "INFO", "RETRY")
+                time.sleep(delay)
+
+class AudioProcessor:
+    """Enhanced audio processing capabilities."""
+    
+    def __init__(self):
+        self.settings = load_settings()
+        self.sample_rate = self.settings.get('audio', {}).get('sample_rate', 44100)
+        self.window_size = self.settings.get('audio', {}).get('window_size', 2048)
+        self.hop_length = self.settings.get('audio', {}).get('hop_length', 512)
+
+    def process_audio(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
+        """Process audio while maintaining quality."""
+        try:
+            # Normalize audio
+            audio = self._normalize_audio(audio)
+            
+            # Apply noise reduction if needed
+            if self.settings.get('audio', {}).get('noise_reduction', True):
+                audio = self._reduce_noise(audio)
+            
+            # Preserve pitch during speed change
+            if speed_factor != 1.0 and self.settings.get('audio', {}).get('preserve_pitch', True):
+                audio = self._preserve_pitch(audio, speed_factor)
+            
+            # Enhance clarity if enabled
+            if self.settings.get('audio', {}).get('enhance_clarity', True):
+                audio = self._enhance_clarity(audio)
+            
+            return audio
+            
+        except Exception as e:
+            log_event(f"Error processing audio: {e}", "ERROR", "AUDIO")
+            return audio
+
+    def _normalize_audio(self, audio: np.ndarray) -> np.ndarray:
+        """Normalize audio levels."""
+        return librosa.util.normalize(audio)
+
+    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
+        """Reduce background noise from audio."""
+        # Implement noise reduction algorithm
+        return audio
+
+    def _preserve_pitch(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
+        """Preserve audio pitch during speed changes."""
+        if speed_factor == 1.0:
+            return audio
+            
+        return librosa.effects.time_stretch(audio, rate=speed_factor)
+
+    def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
+        """Enhance audio clarity."""
+        # Implement clarity enhancement
+        return audio
+
+    def analyze_audio_features(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
+        """Extract detailed audio features for analysis."""
+        try:
+            features = {}
+            
+            # Spectral centroid
+            features['spectral_centroid'] = librosa.feature.spectral_centroid(
+                y=audio,
+                sr=self.sample_rate,
+                hop_length=self.hop_length
+            )[0]
+            
+            # Spectral bandwidth
+            features['spectral_bandwidth'] = librosa.feature.spectral_bandwidth(
+                y=audio,
+                sr=self.sample_rate,
+                hop_length=self.hop_length
+            )[0]
+            
+            # Root mean square energy
+            features['rmse'] = librosa.feature.rms(
+                y=audio,
+                hop_length=self.hop_length
+            )[0]
+            
+            # Zero crossing rate
+            features['zero_crossing_rate'] = librosa.feature.zero_crossing_rate(
+                y=audio,
+                hop_length=self.hop_length
+            )[0]
+            
+            return features
+            
+        except Exception as e:
+            log_event(f"Error analyzing audio features: {e}", "ERROR", "AUDIO")
+            return {}
+
+# Original classes with updates
 class AudioAnalyzer:
     """Handle audio analysis operations for scene detection."""
+    
     def __init__(self):
         self.settings = load_settings()
         self.threshold = self.settings.get('audio_threshold', 0.7)
         self.sample_rate = self.settings.get('audio', {}).get('sample_rate', 44100)
         self.window_size = self.settings.get('audio', {}).get('window_size', 2048)
         self.hop_length = self.settings.get('audio', {}).get('hop_length', 512)
+        self.processor = AudioProcessor()
 
     def extract_audio(self, video_path: str) -> np.ndarray:
         """Extract audio from video file."""
         try:
-            # Use moviepy to extract audio
+            import moviepy.editor as mp
             video = mp.VideoFileClip(video_path)
             if video.audio is None:
                 log_event("No audio track found in video", "WARNING", "AUDIO")
                 return np.array([])
 
-            # Extract audio as numpy array
             audio = video.audio.to_soundarray()
             video.close()
 
-            # Convert to mono if stereo
             if len(audio.shape) > 1:
                 audio = np.mean(audio, axis=1)
 
@@ -57,29 +447,25 @@ class AudioAnalyzer:
             if window_size is None:
                 window_size = self.window_size
 
-            # Calculate short-time energy
             energy = librosa.feature.rms(
                 y=audio,
                 frame_length=window_size,
                 hop_length=self.hop_length
             )[0]
 
-            # Normalize energy
             energy = energy / np.max(energy)
-
-            # Find segments above threshold
             active_segments = []
             start = None
+
             for i, e in enumerate(energy):
                 if e > self.threshold and start is None:
                     start = i * self.hop_length / self.sample_rate
                 elif e <= self.threshold and start is not None:
                     end = i * self.hop_length / self.sample_rate
-                    if end - start >= 0.1:  # Minimum segment duration
+                    if end - start >= 0.1:
                         active_segments.append((start, end))
                     start = None
 
-            # Handle final segment
             if start is not None:
                 end = len(audio) / self.sample_rate
                 if end - start >= 0.1:
@@ -90,101 +476,59 @@ class AudioAnalyzer:
             log_event(f"Error detecting audio activity: {e}", "ERROR", "AUDIO")
             return []
 
-    def analyze_audio_features(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
-        """Extract detailed audio features for analysis."""
-        try:
-            features = {}
-            
-            # Spectral centroid
-            features['spectral_centroid'] = librosa.feature.spectral_centroid(
-                y=audio,
-                sr=self.sample_rate,
-                hop_length=self.hop_length
-            )[0]
-
-            # Spectral bandwidth
-            features['spectral_bandwidth'] = librosa.feature.spectral_bandwidth(
-                y=audio,
-                sr=self.sample_rate,
-                hop_length=self.hop_length
-            )[0]
-
-            # Root mean square energy
-            features['rmse'] = librosa.feature.rms(
-                y=audio,
-                hop_length=self.hop_length
-            )[0]
-
-            # Zero crossing rate
-            features['zero_crossing_rate'] = librosa.feature.zero_crossing_rate(
-                y=audio,
-                hop_length=self.hop_length
-            )[0]
-
-            return features
-        except Exception as e:
-            log_event(f"Error analyzing audio features: {e}", "ERROR", "AUDIO")
-            return {}
-
 class SceneManager:
     """Manage scene detection and analysis."""
+    
     def __init__(self):
         self.settings = load_settings()
         self.scene_settings = self.settings.get('scene_settings', {})
         self.min_scene_length = self.scene_settings.get('min_scene_length', 2)
         self.max_scene_length = self.scene_settings.get('max_scene_length', 300)
         self.threshold = self.scene_settings.get('threshold', 30.0)
+        self._lock = Lock()
+        self.metrics = MetricsCollector()
 
     def detect_scenes(self, frames: List[np.ndarray],
                      audio_segments: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
         """Detect and analyze scenes combining visual and audio information."""
-        scenes = []
-        current_scene = None
-
-        for i in range(1, len(frames)):
-            # Check for scene change
-            if self.is_scene_change(frames[i-1], frames[i]):
+        with self._lock:
+            scenes = []
+            current_scene = None
+            
+            for i in range(1, len(frames)):
+                if self.is_scene_change(frames[i-1], frames[i]):
+                    if current_scene:
+                        scenes.append(self.finalize_scene(current_scene, frames, i-1))
+                    current_scene = self.initialize_scene(i)
+                
                 if current_scene:
-                    scenes.append(self.finalize_scene(current_scene, frames, i-1))
-                current_scene = self.initialize_scene(i)
-
-            # Update current scene
+                    current_scene = self.update_scene(current_scene, frames[i], i)
+                
+                if (current_scene and 
+                    i - current_scene['start_frame'] > self.max_scene_length * 30):
+                    scenes.append(self.finalize_scene(current_scene, frames, i))
+                    current_scene = self.initialize_scene(i + 1)
+            
             if current_scene:
-                current_scene = self.update_scene(current_scene, frames[i], i)
-
-            # Force scene break if current scene is too long
-            if (current_scene and 
-                i - current_scene['start_frame'] > self.max_scene_length * 30):  # Assuming 30fps
-                scenes.append(self.finalize_scene(current_scene, frames, i))
-                current_scene = self.initialize_scene(i + 1)
-
-        # Add final scene
-        if current_scene:
-            scenes.append(self.finalize_scene(current_scene, frames, len(frames)-1))
-
-        # Merge short scenes
-        scenes = self.merge_short_scenes(scenes)
-
-        # Merge with audio information
-        scenes = self.merge_audio_info(scenes, audio_segments, len(frames))
-
-        return scenes
+                scenes.append(self.finalize_scene(current_scene, frames, len(frames)-1))
+            
+            scenes = self.merge_short_scenes(scenes)
+            scenes = self.merge_audio_info(scenes, audio_segments, len(frames))
+            
+            return scenes
 
     def is_scene_change(self, frame1: np.ndarray, frame2: np.ndarray) -> bool:
         """Detect if there is a scene change between frames."""
         try:
-            # Calculate color histogram difference
             hist1 = cv2.calcHist([frame1], [0, 1, 2], None, [8, 8, 8],
                                [0, 256, 0, 256, 0, 256])
             hist2 = cv2.calcHist([frame2], [0, 1, 2], None, [8, 8, 8],
                                [0, 256, 0, 256, 0, 256])
             diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-
-            # Calculate frame difference
+            
             frame_diff = cv2.absdiff(frame1, frame2)
             diff_score = np.mean(frame_diff)
-
-            # Combined decision
+            
             return diff > self.threshold or diff_score > 30.0
         except Exception as e:
             log_event(f"Error in scene change detection: {e}", "ERROR", "SCENE")
@@ -200,7 +544,9 @@ class SceneManager:
             'is_static': False,
             'motion_score': 0.0,
             'audio_activity': 0.0,
-            'frame_count': 0
+            'frame_count': 0,
+            'complexity': 0.0,
+            'transitions': []
         }
 
     def update_scene(self, scene: Dict[str, Any], frame: np.ndarray,
@@ -208,20 +554,54 @@ class SceneManager:
         """Update scene information with new frame."""
         scene['frame_count'] += 1
         scene['end_frame'] = frame_index
-
-        # Update motion score
+        
         if scene['frame_count'] > 1:
             motion = detect_motion_opencl(frame, frame, 0.5)
             scene['motion_score'] = (
                 (scene['motion_score'] * (scene['frame_count']-1) + float(motion)) /
                 scene['frame_count']
             )
-
-        # Check for menu screens
+        
         if detect_menu_screen(frame):
             scene['is_menu'] = True
-
+            
+        # Update scene complexity
+        scene['complexity'] = self._calculate_scene_complexity(frame, scene['complexity'],
+                                                             scene['frame_count'])
+        
         return scene
+
+    def _calculate_scene_complexity(self, frame: np.ndarray, current_complexity: float,
+                                  frame_count: int) -> float:
+        """Calculate scene complexity based on various metrics."""
+        try:
+            # Convert to grayscale
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Calculate edge density
+            edges = cv2.Canny(gray, 100, 200)
+            edge_density = np.count_nonzero(edges) / edges.size
+            
+            # Calculate texture complexity
+            texture_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # Calculate color variety
+            color_score = np.std(frame.reshape(-1, 3), axis=0).mean()
+            
+            # Combine metrics
+            complexity = (0.4 * edge_density + 
+                        0.3 * (texture_score / 1000) +  # Normalize texture score
+                        0.3 * (color_score / 255))      # Normalize color score
+            
+            # Update running average
+            if frame_count == 1:
+                return complexity
+            else:
+                return (current_complexity * (frame_count - 1) + complexity) / frame_count
+                
+        except Exception as e:
+            log_event(f"Error calculating scene complexity: {e}", "ERROR", "SCENE")
+            return current_complexity
 
     def finalize_scene(self, scene: Dict[str, Any], frames: List[np.ndarray],
                       end_frame: int) -> Dict[str, Any]:
@@ -231,19 +611,56 @@ class SceneManager:
             detect_static_frame(frames[i], frames[i+1])
             for i in range(scene['start_frame'], end_frame-1)
         )
+        
+        # Calculate final metrics
+        scene['duration'] = (end_frame - scene['start_frame']) / 30  # Assuming 30fps
+        scene['average_motion'] = scene['motion_score']
+        
+        # Detect transitions
+        scene['transitions'] = self._detect_transitions(
+            frames[scene['start_frame']:end_frame+1]
+        )
+        
         return scene
+
+    def _detect_transitions(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
+        """Detect and classify transitions between scenes."""
+        transitions = []
+        for i in range(1, len(frames)-1):
+            try:
+                # Calculate frame differences
+                diff_prev = cv2.absdiff(frames[i], frames[i-1])
+                diff_next = cv2.absdiff(frames[i], frames[i+1])
+                
+                # Detect transition type
+                if np.mean(diff_prev) < 5 and np.mean(diff_next) > 30:
+                    transitions.append({
+                        'frame': i,
+                        'type': 'cut',
+                        'confidence': 0.9
+                    })
+                elif np.mean(diff_prev) < np.mean(diff_next):
+                    transitions.append({
+                        'frame': i,
+                        'type': 'fade',
+                        'confidence': 0.7
+                    })
+            except Exception as e:
+                log_event(f"Error detecting transitions: {e}", "ERROR", "SCENE")
+                
+        return transitions
 
     def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge scenes that are too short."""
         if not scenes:
             return scenes
-
+            
         merged = []
         current = scenes[0]
-
+        
         for next_scene in scenes[1:]:
             if (next_scene['start_frame'] - current['end_frame'] < 
-                self.min_scene_length * 30):  # Assuming 30fps
+                self.min_scene_length * 30):
                 # Merge scenes
                 current['end_frame'] = next_scene['end_frame']
                 current['frame_count'] += next_scene['frame_count']
@@ -255,10 +672,12 @@ class SceneManager:
                 current['is_action'] |= next_scene['is_action']
                 current['is_menu'] |= next_scene['is_menu']
                 current['is_static'] &= next_scene['is_static']
+                current['complexity'] = (current['complexity'] + next_scene['complexity']) / 2
+                current['transitions'].extend(next_scene['transitions'])
             else:
                 merged.append(current)
                 current = next_scene
-
+        
         merged.append(current)
         return merged
 
@@ -269,7 +688,7 @@ class SceneManager:
         for scene in scenes:
             start_time = scene['start_frame'] / total_frames
             end_time = scene['end_frame'] / total_frames
-
+            
             # Calculate overlap with audio segments
             overlap = 0.0
             for a_start, a_end in audio_segments:
@@ -277,31 +696,59 @@ class SceneManager:
                     overlap_start = max(start_time, a_start)
                     overlap_end = min(end_time, a_end)
                     overlap += overlap_end - overlap_start
-
+            
             scene['audio_activity'] = overlap / (end_time - start_time)
             scene['is_action'] = (
                 scene['audio_activity'] > 0.3 or
                 scene['motion_score'] > 0.5
             )
-
+            
+            # Update scene importance based on audio
+            scene['importance_score'] = self._calculate_importance(scene)
+        
         return scenes
+
+    def _calculate_importance(self, scene: Dict[str, Any]) -> float:
+        """Calculate scene importance based on various factors."""
+        weights = {
+            'motion': 0.3,
+            'audio': 0.3,
+            'complexity': 0.2,
+            'duration': 0.2
+        }
+        
+        # Normalize duration score (prefer scenes between 2-10 seconds)
+        duration_score = 1.0 - abs(scene['duration'] - 6) / 6
+        duration_score = max(0, min(1, duration_score))
+        
+        scores = {
+            'motion': scene['motion_score'],
+            'audio': scene['audio_activity'],
+            'complexity': scene['complexity'],
+            'duration': duration_score
+        }
+        
+        return sum(weights[k] * scores[k] for k in weights)
 
 class PreviewGenerator:
     """Handle preview video generation and management."""
+    
     def __init__(self):
         self.settings = load_settings()
         self.preview_height = self.settings.get('video_settings', {}).get('preview_height', 360)
         self.work_dir = self.settings.get('video', {}).get('temp_directory', 'work')
+        self.memory_manager = MemoryManager()
 
     def create_preview(self, input_path: str) -> str:
         """Create lower resolution preview of video."""
         preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
-
+        
         try:
+            import moviepy.editor as mp
             clip = mp.VideoFileClip(input_path)
             aspect_ratio = clip.w / clip.h
             new_width = int(self.preview_height * aspect_ratio)
-
+            
             preview = clip.resize(height=self.preview_height, width=new_width)
             preview.write_videofile(
                 preview_path,
@@ -310,19 +757,51 @@ class PreviewGenerator:
                 preset='ultrafast',
                 threads=4
             )
-
+            
             clip.close()
             preview.close()
-
+            
+            # Clean up memory
+            self.memory_manager.cleanup()
+            
             log_event(f"Created preview: {preview_path}", "INFO", "PREVIEW")
             return preview_path
-
+            
         except Exception as e:
             log_event(f"Error creating preview: {e}", "ERROR", "PREVIEW")
             return ""
 
+    def generate_thumbnails(self, video_path: str, num_thumbnails: int = 5) -> List[str]:
+        """Generate thumbnails from video for preview."""
+        try:
+            import moviepy.editor as mp
+            clip = mp.VideoFileClip(video_path)
+            duration = clip.duration
+            interval = duration / (num_thumbnails + 1)
+            
+            thumbnails = []
+            for i in range(num_thumbnails):
+                time = interval * (i + 1)
+                frame = clip.get_frame(time)
+                
+                # Save thumbnail
+                thumb_path = os.path.join(
+                    self.work_dir,
+                    f"thumb_{i}_{os.path.basename(video_path)}.jpg"
+                )
+                cv2.imwrite(thumb_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                thumbnails.append(thumb_path)
+            
+            clip.close()
+            return thumbnails
+            
+        except Exception as e:
+            log_event(f"Error generating thumbnails: {e}", "ERROR", "PREVIEW")
+            return []
+
 class MetricsCollector:
     """Collect and track processing metrics."""
+    
     def __init__(self):
         self.metrics = {
             'total_duration': 0,
@@ -355,291 +834,4 @@ class MetricsCollector:
         }
 
     def end_phase_timing(self, phase_name: str) -> None:
-        """End timing a processing phase."""
-        if phase_name in self.metrics['phase_timings']:
-            phase = self.metrics['phase_timings'][phase_name]
-            phase['end'] = datetime.datetime.now()
-            phase['duration'] = (phase['end'] - phase['start']).total_seconds()
-
-    def get_metrics_report(self) -> str:
-        """Generate a detailed metrics report."""
-        report = []
-        report.append("Processing Metrics Report")
-        report.append("-" * 50)
-
-        # Overall metrics
-        total_time = (datetime.datetime.now() - self.start_time).total_seconds()
-        report.append(f"Total Processing Time: {total_time:.2f} seconds")
-        report.append(
-            f"Total Duration Processed: {self.metrics['total_duration']:.2f} seconds")
-        report.append(
-            f"Total Size Processed: {self.metrics['total_size'] / (1024*1024):.2f} MB")
-        report.append(f"Total Frames Processed: {self.metrics['processed_frames']}")
-        report.append(
-            f"Peak Memory Usage: {self.metrics['memory_usage'] / (1024*1024):.2f} MB")
-
-        # Phase timings
-        report.append("\nPhase Timings:")
-        for phase, timing in self.metrics['phase_timings'].items():
-            if timing['duration'] is not None:
-                report.append(f"  {phase}: {timing['duration']:.2f} seconds")
-
-        # File metrics
-        report.append("\nFile Details:")
-        for file_path, metrics in self.metrics['file_metrics'].items():
-            report.append(f"\n  {os.path.basename(file_path)}:")
-            report.append(f"    Duration: {metrics.get('duration', 0):.2f} seconds")
-            report.append(
-                f"    Size: {metrics.get('size', 0) / (1024*1024):.2f} MB")
-            report.append(f"    Frames: {metrics.get('frames', 0)}")
-
-        # Performance metrics
-        if total_time > 0:
-            fps = self.metrics['processed_frames'] / total_time
-            report.append(f"\nProcessing Performance:")
-            report.append(f"  Average FPS: {fps:.2f}")
-            report.append(
-                f"  Processing Ratio: {self.metrics['total_duration']/total_time:.2f}x")
-
-        return "\n".join(report)
-
-class FileProcessor:
-    """Handle file operations and tracking."""
-    def __init__(self, supported_formats: List[str]):
-        self.supported_formats = supported_formats
-        self.processed_files = {}
-        self.metrics_collector = MetricsCollector()
-
-    def scan_directory(self, directory: str) -> List[str]:
-        """Scan directory for supported video files."""
-        video_files = []
-        try:
-            for root, _, files in os.walk(directory):
-                for file in sorted(files):
-                    if any(file.lower().endswith(fmt) for fmt in self.supported_formats):
-                        full_path = os.path.join(root, file)
-                        video_files.append(full_path)
-                        self._collect_file_metrics(full_path)
-            return video_files
-        except Exception as e:
-            log_event(f"Error scanning directory {directory}: {e}", "ERROR", "FILE_SCAN")
-            return []
-
-    def _collect_file_metrics(self, file_path: str) -> None:
-        """Collect metrics for a video file."""
-        try:
-            size = os.path.getsize(file_path)
-            clip = mp.VideoFileClip(file_path)
-            duration = clip.duration
-            frames = int(duration * clip.fps)
-            
-            metrics = {
-                'size': size,
-                'duration': duration,
-                'frames': frames,
-                'fps': clip.fps,
-                'resolution': (clip.w, clip.h)
-            }
-            
-            self.metrics_collector.update_file_metrics(file_path, metrics)
-            self.processed_files[file_path] = metrics
-            
-            log_event(
-                f"File metrics - {os.path.basename(file_path)}: "
-                f"Duration={duration:.2f}s, Size={size/(1024*1024):.2f}MB, "
-                f"Frames={frames}",
-                "INFO",
-                "METRICS"
-            )
-            
-            clip.close()
-                     
-        except Exception as e:
-            log_event(f"Error collecting metrics for {file_path}: {e}", "ERROR", "METRICS")
-
-class LogManager:
-    """Enhanced logging system with categories and levels."""
-    def __init__(self, log_file: str):
-        self.log_file = log_file
-        self.log_levels = {
-            'DEBUG': 0,
-            'INFO': 1,
-            'WARNING': 2,
-            'ERROR': 3
-        }
-        self.current_level = 'INFO'
-        self.lock = Lock()
-        self._ensure_log_file()
-
-    def _ensure_log_file(self) -> None:
-        """Ensure log file exists and is ready."""
-        try:
-            if not os.path.exists(os.path.dirname(self.log_file)):
-                os.makedirs(os.path.dirname(self.log_file))
-            if not os.path.exists(self.log_file):
-                with open(self.log_file, 'w') as f:
-                    f.write(f"Log initialized: {datetime.datetime.now()}\n")
-        except Exception as e:
-            print(f"Error initializing log file: {e}")
-
-    def log(self, message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
-        """Log a message with level and category."""
-        if self.log_levels.get(level, 0) >= self.log_levels.get(self.current_level, 0):
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            log_entry = f"[{timestamp}] [{level}] [{category}] {message}"
-            
-            with self.lock:
-                try:
-                    with open(self.log_file, 'a') as f:
-                        f.write(log_entry + '\n')
-                except Exception as e:
-                    print(f"Error writing to log: {e}")
-                    print(log_entry)
-
-    def get_recent_logs(self, num_lines: int = 50, level: Optional[str] = None,
-                       category: Optional[str] = None) -> List[str]:
-        """Get recent log entries with optional filtering."""
-        with self.lock:
-            try:
-                with open(self.log_file, 'r') as f:
-                    lines = f.readlines()
-                
-                filtered_lines = []
-                for line in reversed(lines):
-                    if level and f"[{level}]" not in line:
-                        continue
-                    if category and f"[{category}]" not in line:
-                        continue
-                    filtered_lines.append(line.strip())
-                    if len(filtered_lines) >= num_lines:
-                        break
-                        
-                return list(reversed(filtered_lines))
-            except Exception as e:
-                return [f"Error reading logs: {e}"]
-
-    def clear_logs(self) -> None:
-        """Clear the log file."""
-        with self.lock:
-            try:
-                with open(self.log_file, 'w') as f:
-                    f.write(f"Log cleared: {datetime.datetime.now()}\n")
-            except Exception as e:
-                print(f"Error clearing logs: {e}")
-
-class ProgressTracker:
-    """Track processing progress and status."""
-    def __init__(self, total_steps: int):
-        self.total_steps = total_steps
-        self.current_step = 0
-        self.start_time = time.time()
-        self.phase = "Initializing"
-        self.metrics_collector = MetricsCollector()
-        
-    def update(self, step: int = 1, phase: Optional[str] = None) -> None:
-        """Update progress and optionally change phase."""
-        self.current_step += step
-        if phase:
-            self.phase = phase
-            self.metrics_collector.start_phase_timing(phase)
-        self._log_progress()
-        
-    def _log_progress(self) -> None:
-        """Log progress update with memory usage."""
-        progress = (self.current_step / self.total_steps) * 100
-        elapsed = time.time() - self.start_time
-        memory = psutil.Process().memory_info().rss
-        
-        self.metrics_collector.update_processing_metrics(1, memory)
-        log_event(
-            f"Progress: {progress:.1f}% - Phase: {self.phase} - "
-            f"Elapsed: {elapsed:.1f}s - Memory: {memory/(1024*1024):.1f}MB",
-            "INFO",
-            "PROGRESS"
-        )
-        
-    def get_progress(self) -> Dict[str, Any]:
-        """Get current progress information."""
-        elapsed = time.time() - self.start_time
-        progress = (self.current_step / self.total_steps) * 100
-        
-        return {
-            "progress": progress,
-            "phase": self.phase,
-            "elapsed": f"{int(elapsed//3600):02d}:{int((elapsed%3600)//60):02d}:"
-                      f"{int(elapsed%60):02d}",
-            "metrics": self.metrics_collector.get_metrics_report()
-        }
-
-def monitor_memory_usage(threshold_mb: float = 1000.0) -> bool:
-    """Monitor memory usage and log warnings if threshold exceeded."""
-    try:
-        current_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # Convert to MB
-        if current_memory > threshold_mb:
-            log_event(
-                f"High memory usage detected: {current_memory:.1f}MB",
-                "WARNING",
-                "MEMORY"
-            )
-            return True
-        return False
-    except Exception as e:
-        log_event(f"Error monitoring memory: {e}", "ERROR", "MEMORY")
-        return False
-
-def cleanup_work_directory() -> None:
-    """Clean up temporary files in work directory."""
-    try:
-        work_dir = os.path.join("work")
-        if os.path.exists(work_dir):
-            shutil.rmtree(work_dir)
-            os.makedirs(work_dir)
-            log_event("Work directory cleaned", "INFO", "CLEANUP")
-    except Exception as e:
-        log_event(f"Error cleaning work directory: {e}", "ERROR", "CLEANUP")
-
-def load_hardware_config() -> Dict[str, bool]:
-    """Load hardware configuration from hardware.txt."""
-    hardware_file = os.path.join("data", "hardware.txt")
-    hardware_config = {
-        "x64": False,
-        "Avx2": False,
-        "Aocl": False,
-        "OpenCL": False,
-    }
-    try:
-        with open(hardware_file, "r") as f:
-            for line in f:
-                key, value = line.strip().split(": ")
-                hardware_config[key] = value.lower() == "true"
-        log_event("Hardware configuration loaded", "INFO", "CONFIG")
-    except Exception as e:
-        log_event(f"Error loading hardware config: {e}", "ERROR", "CONFIG")
-    return hardware_config
-
-def load_settings() -> Dict[str, Any]:
-    """Load settings from temporary.py."""
-    try:
-        from data.temporary import SEARCH_CRITERIA, HARDWARE_CONFIG, VIDEO_CONFIG
-        log_event("Settings loaded from temporary.py", "INFO", "CONFIG")
-        return {
-            "search": SEARCH_CRITERIA,
-            "hardware": HARDWARE_CONFIG,
-            "video": VIDEO_CONFIG
-        }
-    except Exception as e:
-        log_event(f"Error loading settings: {e}", "ERROR", "CONFIG")
-        return {}
-
-def log_event(message: str, level: str = 'INFO', category: str = 'GENERAL') -> None:
-    """Log an event to the event log file."""
-    log_file = os.path.join("data", "events.txt")
-    try:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"[{timestamp}] [{level}] [{category}] {message}\n"
-        
-        with open(log_file, 'a') as f:
-            f.write(log_entry)
-    except Exception as e:
-        print(f"Error logging event: {e}")
-        print(log_entry)
+        """End timing
