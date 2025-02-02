@@ -26,30 +26,28 @@ from utility import (
     detect_menu_screen,
     monitor_memory_usage
 )
+from scripts.temporary import (
+    PROCESSING_CONFIG,
+    AUDIO_CONFIG,
+    SPEED_CONFIG,
+    MEMORY_CONFIG,
+    GLOBAL_STATE,
+    SceneData,
+    update_processing_state
+)
 from analyze import VideoAnalyzer
 from interface import ProcessingError
-
-@dataclass
-class ProcessingConfig:
-    """Configuration for video processing."""
-    max_speed: float = 4.0
-    min_speed: float = 1.0
-    transition_frames: int = 30
-    target_height: int = 720
-    preview_height: int = 360
-    output_codec: str = 'libx264'
-    audio_codec: str = 'aac'
-    preserve_pitch: bool = True
-    enhance_audio: bool = True
-    threads: int = 4
-    batch_size: int = 100
 
 class VideoProcessor:
     """Handles video processing and consolidation operations."""
     
     def __init__(self, log_manager=None):
         self.core = CoreUtilities()
-        self.config = ProcessingConfig(**self.core.settings.get('processing', {}))
+        self.config = PROCESSING_CONFIG
+        self.audio_config = AUDIO_CONFIG
+        self.speed_config = SPEED_CONFIG
+        self.memory_config = MEMORY_CONFIG
+        
         self.analyzer = VideoAnalyzer(log_manager)
         self.audio_processor = AudioProcessor()
         self.memory_manager = MemoryManager()
@@ -69,25 +67,33 @@ class VideoProcessor:
                 self.cancel_flag.clear()
                 self.progress.start_stage("Processing")
                 
-                # Phase 1: Analysis
-                analysis = self._analyze_video(input_path, target_duration)
-                if not analysis or self.cancel_flag.is_set():
-                    return False
-
+                # Get scene data from global state if available
+                scenes = GLOBAL_STATE.detected_scenes if GLOBAL_STATE.detected_scenes else []
+                
+                # Phase 1: Analysis if not already done
+                if not scenes:
+                    analysis = self._analyze_video(input_path, target_duration)
+                    if not analysis or self.cancel_flag.is_set():
+                        return False
+                    scenes = [SceneData(**scene) for scene in analysis['scenes']]
+                
                 # Phase 2: Scene Processing
-                processed_scenes = self._process_scenes(input_path, analysis)
+                processed_scenes = self._process_scenes(input_path, scenes)
                 if not processed_scenes or self.cancel_flag.is_set():
                     return False
-
+                
                 # Phase 3: Final Compilation
-                success = self._compile_video(processed_scenes, output_path,
-                                           analysis['frame_rate'])
+                success = self._compile_video(
+                    processed_scenes,
+                    output_path,
+                    GLOBAL_STATE.current_video.fps if GLOBAL_STATE.current_video else 30.0
+                )
                 
                 self.progress.complete_stage("Processing")
                 self.memory_manager.cleanup()
                 
                 return success
-
+                
         except Exception as e:
             self.error_handler.handle_error(e, "video_processing")
             return False
@@ -106,14 +112,21 @@ class VideoProcessor:
             return None
 
     def _process_scenes(self, input_path: str, 
-                       analysis: Dict[str, Any]) -> List[mp.VideoFileClip]:
+                       scenes: List[SceneData]) -> List[mp.VideoFileClip]:
         """Process individual scenes."""
         try:
             clip = mp.VideoFileClip(input_path)
             processed_scenes = []
-            total_scenes = len(analysis['scenes'])
+            total_scenes = len(scenes)
+            
+            update_processing_state(
+                stage="Processing",
+                progress=0,
+                processed_scenes=0,
+                total_scenes=total_scenes
+            )
 
-            for i, scene in enumerate(analysis['scenes']):
+            for i, scene in enumerate(scenes):
                 if self.cancel_flag.is_set():
                     break
 
@@ -123,16 +136,21 @@ class VideoProcessor:
                     f"Processing scene {i+1}/{total_scenes}"
                 )
 
-                start_time = scene['start_frame'] / analysis['frame_rate']
-                end_time = scene['end_frame'] / analysis['frame_rate']
-                scene_clip = clip.subclip(start_time, end_time)
+                scene_clip = clip.subclip(
+                    scene.start_frame / GLOBAL_STATE.current_video.fps,
+                    scene.end_frame / GLOBAL_STATE.current_video.fps
+                )
 
                 processed_clip = self._process_scene_segment(
                     scene_clip,
-                    scene,
-                    analysis['frame_rate']
+                    scene
                 )
                 processed_scenes.append(processed_clip)
+
+                update_processing_state(
+                    processed_scenes=i+1,
+                    progress=progress
+                )
 
                 if self.memory_manager.check_memory()['warning']:
                     self.memory_manager.cleanup()
@@ -417,38 +435,6 @@ class VideoProcessor:
         except Exception as e:
             self.error_handler.handle_error(e, "transition_creation")
             return mp.concatenate_videoclips([clip1, clip2])
-
-    def _process_scenes_with_transitions(self, 
-                                       scenes: List[mp.VideoFileClip]) -> mp.VideoFileClip:
-        """Process scenes with smooth transitions."""
-        try:
-            processed_scenes = []
-            total_scenes = len(scenes)
-            
-            for i in range(total_scenes - 1):
-                # Process current scene
-                current_scene = self._process_scene_segment(scenes[i])
-                
-                # Create transition to next scene
-                transition = self._create_smooth_transition(
-                    current_scene,
-                    self._process_scene_segment(scenes[i + 1])
-                )
-                
-                processed_scenes.append(transition)
-            
-            # Add final scene
-            processed_scenes.append(
-                self._process_scene_segment(scenes[-1])
-            )
-            
-            # Concatenate all processed scenes
-            final_clip = mp.concatenate_videoclips(processed_scenes)
-            return final_clip
-            
-        except Exception as e:
-            self.error_handler.handle_error(e, "scene_transition_processing")
-            return mp.concatenate_videoclips(scenes)
 
 class BatchProcessor:
     """Handle batch processing of multiple videos."""

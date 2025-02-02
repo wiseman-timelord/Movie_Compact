@@ -21,26 +21,22 @@ from utility import (
 from scripts.process import VideoProcessor
 from scripts.interface import launch_gradio_interface
 from scripts.analyze import VideoAnalyzer
-
-@dataclass
-class SystemConfig:
-    """System configuration settings."""
-    hardware_config: Dict[str, bool]
-    settings: Dict[str, Any]
-    work_dir: str = "work"
-    output_dir: str = "output"
-    input_dir: str = "input"
-    data_dir: str = "data"
+from scripts.manager import download_file, get_file_name_from_url
+from scripts.setup import setup_menu, load_config, save_config
 
 class MovieCompact:
-    """Main application class coordinating all components."""
-    
     def __init__(self):
-        self.core = CoreUtilities()
-        self.config = SystemConfig(
-            hardware_config=load_hardware_config(),
-            settings=load_settings()
+        from scripts.temporary import (
+            HARDWARE_CONFIG,
+            PROCESSING_CONFIG,
+            MEMORY_CONFIG
         )
+        
+        self.core = CoreUtilities()
+        self.hardware_config = HARDWARE_CONFIG
+        self.processing_config = PROCESSING_CONFIG
+        self.memory_config = MEMORY_CONFIG
+        
         self.log_manager = LogManager(os.path.join("data", "events.txt"))
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
@@ -56,7 +52,6 @@ class MovieCompact:
         self.preview_generator = PreviewGenerator()
 
     def validate_environment(self) -> None:
-        """Validate and setup program environment."""
         try:
             # Create required directories
             required_dirs = ['data', 'input', 'output', 'work']
@@ -64,27 +59,25 @@ class MovieCompact:
                 os.makedirs(dir_name, exist_ok=True)
                 self.log_manager.log(
                     f"Verified directory: {dir_name}",
-                    "INFO",
-                    "STARTUP"
+                    "INFO", "STARTUP"
                 )
 
             # Check required files
             required_files = [
-                os.path.join('data', 'temporary.py'),
                 os.path.join('data', 'persistent.json'),
                 os.path.join('data', 'hardware.txt'),
                 os.path.join('data', 'events.txt')
             ]
-            
-            missing_files = []
-            for file_path in required_files:
-                if not os.path.exists(file_path):
-                    missing_files.append(file_path)
-                    # Create events.txt if missing
-                    if file_path.endswith('events.txt'):
-                        with open(file_path, 'w') as f:
-                            f.write("Log initialized\n")
-                        continue
+                
+                missing_files = []
+                for file_path in required_files:
+                    if not os.path.exists(file_path):
+                        missing_files.append(file_path)
+                        # Create events.txt if missing
+                        if file_path.endswith('events.txt'):
+                            with open(file_path, 'w') as f:
+                                f.write("Log initialized\n")
+                            continue
             
             if missing_files:
                 self.log_manager.log(

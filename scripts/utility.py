@@ -16,25 +16,28 @@ from threading import Lock, Event
 import time
 from queue import Queue
 from interface import HardwareError, ConfigurationError, MovieCompactError
+from scripts.temporary import (
+    MEMORY_CONFIG,
+    ERROR_CONFIG,
+    AUDIO_CONFIG,
+    PROCESSING_CONFIG
+)
 
 class CoreUtilities:
-    """Core utilities and system management."""
-    
     def __init__(self):
         self.memory_manager = MemoryManager()
         self.progress_monitor = ProgressMonitor()
         self.error_handler = ErrorHandler()
-        self.settings = load_settings()
 
 class MemoryManager:
     """Manage memory usage and cleanup."""
     
-    def __init__(self, max_memory_usage: float = 0.8):
-        self.max_memory_usage = max_memory_usage
-        self.warning_threshold = 0.7
-        self.critical_threshold = 0.9
+    def __init__(self):
+        self.max_memory_usage = MEMORY_CONFIG['max_memory_usage']
+        self.warning_threshold = MEMORY_CONFIG['warning_threshold']
+        self.critical_threshold = MEMORY_CONFIG['critical_threshold']
         self._last_cleanup = 0
-        self.cleanup_interval = 60  # seconds
+        self.cleanup_interval = MEMORY_CONFIG['cleanup_interval']
 
     def check_memory(self) -> Dict[str, Union[bool, float]]:
         """Check current memory usage and status."""
@@ -259,10 +262,10 @@ class ErrorHandler:
     """Handle and manage processing errors."""
     
     def __init__(self):
-        self.error_log: List[Dict[str, Any]] = []
+        self.error_log = []
         self._lock = Lock()
-        self.max_retries = 3
-        self.retry_delay = 5  # seconds
+        self.max_retries = ERROR_CONFIG['max_retries']
+        self.retry_delay = ERROR_CONFIG['retry_delay']
 
     def handle_error(self, error: Exception, context: str) -> Dict[str, Any]:
         """Handle an error and determine recovery action."""
@@ -318,10 +321,12 @@ class AudioProcessor:
     """Enhanced audio processing capabilities."""
     
     def __init__(self):
-        self.settings = load_settings()
-        self.sample_rate = self.settings.get('audio', {}).get('sample_rate', 44100)
-        self.window_size = self.settings.get('audio', {}).get('window_size', 2048)
-        self.hop_length = self.settings.get('audio', {}).get('hop_length', 512)
+        self.sample_rate = AUDIO_CONFIG['sample_rate']
+        self.window_size = AUDIO_CONFIG['window_size']
+        self.hop_length = AUDIO_CONFIG['hop_length']
+        self.preserve_pitch = AUDIO_CONFIG['preserve_pitch']
+        self.enhance_audio = AUDIO_CONFIG['enhance_audio']
+        self.feature_settings = AUDIO_CONFIG['feature_settings']
 
     def process_audio(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
         """Process audio while maintaining quality."""
@@ -407,14 +412,11 @@ class AudioProcessor:
 
 # Original classes with updates
 class AudioAnalyzer:
-    """Handle audio analysis operations for scene detection."""
-    
     def __init__(self):
-        self.settings = load_settings()
-        self.threshold = self.settings.get('audio_threshold', 0.7)
-        self.sample_rate = self.settings.get('audio', {}).get('sample_rate', 44100)
-        self.window_size = self.settings.get('audio', {}).get('window_size', 2048)
-        self.hop_length = self.settings.get('audio', {}).get('hop_length', 512)
+        self.threshold = AUDIO_CONFIG['threshold']
+        self.sample_rate = AUDIO_CONFIG['sample_rate']
+        self.window_size = AUDIO_CONFIG['window_size']
+        self.hop_length = AUDIO_CONFIG['hop_length']
         self.processor = AudioProcessor()
 
     def extract_audio(self, video_path: str) -> np.ndarray:
@@ -477,14 +479,11 @@ class AudioAnalyzer:
             return []
 
 class SceneManager:
-    """Manage scene detection and analysis."""
-    
     def __init__(self):
-        self.settings = load_settings()
-        self.scene_settings = self.settings.get('scene_settings', {})
-        self.min_scene_length = self.scene_settings.get('min_scene_length', 2)
-        self.max_scene_length = self.scene_settings.get('max_scene_length', 300)
-        self.threshold = self.scene_settings.get('threshold', 30.0)
+        self.scene_settings = SCENE_CONFIG
+        self.min_scene_length = SCENE_CONFIG['min_scene_length']
+        self.max_scene_length = SCENE_CONFIG['max_scene_length']
+        self.threshold = SCENE_CONFIG['scene_threshold']
         self._lock = Lock()
         self.metrics = MetricsCollector()
 
@@ -734,9 +733,8 @@ class PreviewGenerator:
     """Handle preview video generation and management."""
     
     def __init__(self):
-        self.settings = load_settings()
-        self.preview_height = self.settings.get('video_settings', {}).get('preview_height', 360)
-        self.work_dir = self.settings.get('video', {}).get('temp_directory', 'work')
+        self.preview_height = PROCESSING_CONFIG['video_settings']['preview_height']
+        self.work_dir = PATHS['work']
         self.memory_manager = MemoryManager()
 
     def create_preview(self, input_path: str) -> str:

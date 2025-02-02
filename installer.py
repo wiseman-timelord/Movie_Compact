@@ -216,10 +216,10 @@ def verify_installation():
     """Verify all required files and directories exist."""
     print("\nVerifying installation...")
     required_dirs = {
-        ".": ["data", "input", "output", "work"]
+        ".": ["data", "input", "output", "work", "scripts"]  # Added scripts
     }
     required_files = {
-        "data": ["temporary.py", "persistent.json", "requirements.txt", "hardware.txt", "events.txt"]
+        "data": ["persistent.json", "requirements.txt", "hardware.txt", "events.txt"]  # Removed temporary.py
     }
     
     status = True
@@ -276,7 +276,7 @@ def main():
         
         # Detect hardware and create configuration files
         hardware_info = detect_hardware()
-        create_temporary_py()
+        # Removed create_temporary_py() call
         create_persistent_json()
         create_requirements_file()
         

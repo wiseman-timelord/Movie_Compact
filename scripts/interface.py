@@ -20,37 +20,38 @@ from utility import (
     ErrorHandler,
     CoreUtilities
 )
+from scripts.temporary import (
+    PROCESSING_CONFIG,
+    PROGRESS_CONFIG,
+    ERROR_CONFIG,
+    GLOBAL_STATE,
+    ProcessingState,
+    VideoMetadata,
+    get_full_path,
+    update_processing_state
+)
 from process import VideoProcessor, BatchProcessor
 
 class MovieCompactError(Exception):
     """Base exception for Movie Consolidator errors."""
     pass
 
-@dataclass
-class ProcessingConfig:
-    """Configuration for video processing."""
-    motion_threshold: float = 0.3
-    texture_threshold: float = 0.4
-    min_scene_duration: float = 2.0
-    max_scene_duration: float = 300.0
-    max_speed_factor: float = 4.0
-    preview_height: int = 360
-    preserve_pitch: bool = True
-    enhance_audio: bool = True
-
 class InterfaceManager:
     """Manage Gradio interface and user interactions."""
     
     def __init__(self, log_manager: Optional[LogManager] = None):
         self.core = CoreUtilities()
-        self.config = ProcessingConfig(**self.core.settings.get('processing', {}))
+        self.config = PROCESSING_CONFIG
+        self.progress_config = PROGRESS_CONFIG
+        self.error_config = ERROR_CONFIG
+        
         self.processor = VideoProcessor(log_manager)
         self.batch_processor = BatchProcessor()
-        self.file_processor = FileProcessor(['.mp4', '.avi', '.mkv'])
+        self.file_processor = FileProcessor(self.config['supported_formats'])
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
-        self.log_manager = log_manager or LogManager("data/events.txt")
+        self.log_manager = log_manager or LogManager(get_full_path("data/events.txt"))
         self.processing_lock = Lock()
         self.cancel_flag = Event()
         self.current_video_info = None
@@ -348,11 +349,20 @@ class InterfaceManager:
             return "No file selected"
             
         try:
+            metadata = VideoMetadata(
+                path=video_file.name,
+                duration=0,  # Will be filled by processor
+                frame_count=0,
+                fps=0,
+                resolution=(0, 0),
+                filesize=os.path.getsize(video_file.name),
+                has_audio=False
+            )
+            
             info, duration = self.processor.get_video_info(video_file.name)
-            self.current_video_info = {
-                'path': video_file.name,
-                'duration': duration
-            }
+            metadata.duration = duration
+            GLOBAL_STATE.current_video = metadata
+            
             return info
         except Exception as e:
             return f"Error reading video file: {e}"
@@ -435,9 +445,8 @@ class InterfaceManager:
         return "Batch processing cancelled"
 
     def _save_settings(self, *args) -> str:
-        """Save current settings."""
         try:
-            settings = {
+            new_settings = {
                 'motion_threshold': args[0],
                 'min_scene_duration': args[1],
                 'max_speed_factor': args[2],
@@ -445,11 +454,12 @@ class InterfaceManager:
                 'enhance_audio': args[4]
             }
             
-            with open(os.path.join("data", "settings.json"), 'w') as f:
-                json.dump(settings, f, indent=4)
+            # Update global configuration
+            PROCESSING_CONFIG.update(new_settings)
+            AUDIO_CONFIG['preserve_pitch'] = new_settings['preserve_pitch']
+            AUDIO_CONFIG['enhance_audio'] = new_settings['enhance_audio']
             
             return "Settings saved successfully"
-            
         except Exception as e:
             return f"Error saving settings: {e}"
 
@@ -505,6 +515,13 @@ class InterfaceManager:
             self.progress_bar.update(progress / 100)
             status = f"Stage: {stage}\nProgress: {progress:.1f}%\n{message}"
             self.status_output.update(status)
+            
+            update_processing_state(
+                stage=stage,
+                progress=progress,
+                current_frame=GLOBAL_STATE.processing_state.current_frame,
+                total_frames=GLOBAL_STATE.processing_state.total_frames
+            )
             
             # Update metrics
             self.metrics.update_processing_metrics(stage, progress)

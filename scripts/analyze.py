@@ -5,11 +5,21 @@ import numpy as np
 from typing import List, Dict, Any, Tuple, Optional, Generator, Union
 from dataclasses import dataclass
 from utility import (
-    analyze_segment, extract_frames, load_settings, log_event,
+    log_event,
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
     monitor_memory_usage, MemoryManager, ProgressMonitor, ErrorHandler,
     CoreUtilities
+)
+from scripts.temporary import (
+    ANALYSIS_CONFIG,
+    PROCESSING_CONFIG,
+    MEMORY_CONFIG,
+    SCENE_CONFIG,
+    GLOBAL_STATE,
+    VideoMetadata,
+    SceneData,
+    ProcessingState
 )
 from interface import AnalysisError, MovieCompactError
 import time
@@ -17,22 +27,19 @@ from collections import deque
 from scipy import signal
 import librosa
 
-@dataclass
-class AnalysisConfig:
-    """Configuration for video analysis."""
-    motion_threshold: float = 0.3
-    texture_threshold: float = 0.4
-    static_threshold: float = 0.95
-    menu_threshold: float = 0.7
-    action_threshold: float = 0.6
-    min_scene_duration: float = 2.0
-
 class ContentAnalyzer:
     """Advanced content analysis for video frames."""
     
     def __init__(self):
-        self.settings = load_settings()
+        # Remove old settings loading
+        # self.settings = load_settings()
         self.frame_cache = {}
+        # Add config values from temporary.py
+        self.motion_threshold = ANALYSIS_CONFIG['motion_threshold']
+        self.texture_threshold = ANALYSIS_CONFIG['texture_threshold']
+        self.static_threshold = ANALYSIS_CONFIG['static_threshold']
+        self.menu_threshold = ANALYSIS_CONFIG['menu_threshold']
+        self.action_threshold = ANALYSIS_CONFIG['action_threshold']
     
     def analyze_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """Single entry point for frame analysis."""
@@ -121,7 +128,12 @@ class VideoAnalyzer:
     
     def __init__(self, log_manager=None):
         self.core = CoreUtilities()
-        self.config = AnalysisConfig(**self.core.settings.get('analysis', {}))
+        # Update to use new config
+        self.config = ANALYSIS_CONFIG
+        self.scene_config = SCENE_CONFIG
+        self.processing_config = PROCESSING_CONFIG
+        self.memory_config = MEMORY_CONFIG
+        
         self.content_analyzer = ContentAnalyzer()
         self.scene_manager = SceneManager()
         self.audio_analyzer = AudioAnalyzer()
@@ -130,25 +142,42 @@ class VideoAnalyzer:
         self.progress = ProgressMonitor()
         self.error_handler = ErrorHandler()
         self.log_manager = log_manager
-        self.frame_buffer = deque(maxlen=30)
-    
+        self.frame_buffer = deque(maxlen=self.memory_config['frame_buffer_size'])
+
     def analyze_video(self, video_path: str, target_duration: float) -> Dict[str, Any]:
         """Analyze video content and structure."""
         try:
+            GLOBAL_STATE.processing_state = ProcessingState(
+                stage='analysis',
+                progress=0.0,
+                current_frame=0,
+                total_frames=0,
+                processed_scenes=0,
+                total_scenes=0,
+                start_time=time.time(),
+                estimated_completion=0.0
+            )
+            
             self.progress.start_stage("Analysis")
+            
+            # Get video metadata
+            metadata = self._get_video_metadata(video_path)
+            GLOBAL_STATE.current_video = metadata
             
             # Initial setup and preview generation
             preview_path = self._setup_analysis(video_path)
             if not preview_path:
                 raise AnalysisError("Failed to create preview")
-            
-            # Extract and analyze content
+                
             frames, audio_data = self._extract_content(preview_path)
             if not frames:
                 raise AnalysisError("Failed to extract frames")
             
+            GLOBAL_STATE.processing_state.total_frames = len(frames)
+            
             # Process scenes
             scenes = self._process_scenes(frames, audio_data, target_duration)
+            GLOBAL_STATE.detected_scenes = [SceneData(**scene) for scene in scenes]
             
             # Calculate final statistics
             stats = self._calculate_statistics(scenes)
@@ -159,13 +188,29 @@ class VideoAnalyzer:
             return {
                 'scenes': scenes,
                 'stats': stats,
-                'frame_rate': self._get_frame_rate(preview_path),
-                'total_frames': len(frames)
+                'frame_rate': metadata.fps,
+                'total_frames': metadata.frame_count
             }
             
         except Exception as e:
             self.error_handler.handle_error(e, "video_analysis")
             return {'scenes': [], 'stats': {}, 'frame_rate': 0, 'total_frames': 0}
+
+    def _get_video_metadata(self, video_path: str) -> VideoMetadata:
+        """Get video metadata."""
+        cap = cv2.VideoCapture(video_path)
+        return VideoMetadata(
+            path=video_path,
+            duration=cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS),
+            frame_count=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
+            fps=cap.get(cv2.CAP_PROP_FPS),
+            resolution=(
+                int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            ),
+            filesize=os.path.getsize(video_path),
+            has_audio=True  # We'll update this when we actually check audio
+        )
     
     def _setup_analysis(self, video_path: str) -> Optional[str]:
         """Setup analysis environment."""
@@ -197,14 +242,15 @@ class VideoAnalyzer:
         
         return self._merge_scenes(scenes)
     
-    def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
-        """Group frames into potential scenes."""
-        scene_start = 0
-        for i in range(1, len(frames)):
-            if detect_motion_opencl(frames[i-1], frames[i], self.config.motion_threshold):
-                if i - scene_start >= self.config.min_scene_duration * 30:  # Assuming 30fps
-                    yield frames[scene_start:i]
-                    scene_start = i
+def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
+    scene_start = 0
+    for i in range(1, len(frames)):
+        # Update this line to use config dictionary style access
+        if detect_motion_opencl(frames[i-1], frames[i], self.config['motion_threshold']):
+            # Update this line as well
+            if i - scene_start >= self.config['min_scene_duration'] * 30:
+                yield frames[scene_start:i]
+                scene_start = i
         if scene_start < len(frames):
             yield frames[scene_start:]
     
