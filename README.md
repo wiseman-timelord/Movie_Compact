@@ -1,4 +1,4 @@
-# Movie-Consolidator
+# Movie_Compact
 Status: Alpha (Initial, Testing & Bugfixing, close to beta)
 
 ### Plan...
