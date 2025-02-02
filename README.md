@@ -1,5 +1,5 @@
 # Movie_Compact
-Status: Alpha (Initial, Testing & Bugfixing, close to beta)
+Status: Alpha (close to beta)
 
 ### Next Steps
 - Focus on completing core video processing functionality
