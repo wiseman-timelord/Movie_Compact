@@ -78,14 +78,13 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
 │   ├── analyze.py       # Video/audio analysis
 │   ├── process.py       # Video processing engine
 │   ├── utility.py       # Support functions/classes
-
+│   ├── temporary.py    # Runtime settings and config
 ```
 
 ## Files Created
 ```
 ├── data\              # Configuration and logging
 │   ├── events.txt     # Progress and debug logs
-│   ├── temporary.py   # Runtime settings
 │   ├─ persistent.json # User preferences
 │   ├── hardware.txt   # System capabilities
 ├── input\             # Source video storage
