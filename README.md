@@ -68,11 +68,7 @@ The program is supposed to consolidate very large video clips into action-packed
   6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
   7. ) Clean output ready for example, clips to be loaded in movie maker for then the addition of titles/credits/intro/outro.
 
-</details>
-
 ## Package Structure
-<details>
-  <summary>Expand Details ></summary>
 ```
 .\
 ├── README.md             # Project documentation
@@ -96,7 +92,6 @@ The program is supposed to consolidate very large video clips into action-packed
 ├── output\            # Processed video output
 ├── work\              # Temporary processing files
 ```
-</details>
 
 ## Credits
 - OpenCV: Core video processing
