@@ -50,10 +50,7 @@ A sophisticated video processing application that creates condensed, action-focu
 Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
 
 ## Development
-<details>
-  <summary>Expand Details ></summary>
-  ```
-  The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
+The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
   1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
   1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
   2. Intelligent preview system that converts videos to 360p in the `work` folder, enabling fast frame analysis while maintaining full quality for final output. This dual-processing approach prevents memory overload.
@@ -70,35 +67,35 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
       - Real-time playback for action sequences
   6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
   7. ) Clean output ready for example, clips to be loaded in movie maker for then the addition of titles/credits/intro/outro.
-  ```
+
 </details>
 
 ## Package Structure
 <details>
   <summary>Expand Details ></summary>
-  ```
-  .\
-  ├── README.md             # Project documentation
-  ├── requisites.py          # standalone installer script.
-  ├── launcher.py           # Main program entry point
-  ├── scripts\
-  │   ├── interface.py     # Gradio UI implementation
-  │   ├── analyze.py       # Video/audio analysis
-  │   ├── process.py       # Video processing engine
-  │   ├── utility.py       # Support functions/classes
-  │   ├── temporary.py    # globals and runtime config
-  ```
-  
-  ## Files Created
-  ```
-  ├── data\              # Configuration and logging
-  │   ├── events.txt     # Progress and debug logs
-  │   ├─ persistent.json # persistent config
-  │   ├── hardware.txt   # System capabilities
-  ├── input\             # Source video storage
-  ├── output\            # Processed video output
-  ├── work\              # Temporary processing files
-  ```
+```
+.\
+├── README.md             # Project documentation
+├── requisites.py          # standalone installer script.
+├── launcher.py           # Main program entry point
+├── scripts\
+│   ├── interface.py     # Gradio UI implementation
+│   ├── analyze.py       # Video/audio analysis
+│   ├── process.py       # Video processing engine
+│   ├── utility.py       # Support functions/classes
+│   ├── temporary.py    # globals and runtime config
+```
+
+## Files Created
+```
+├── data\              # Configuration and logging
+│   ├── events.txt     # Progress and debug logs
+│   ├─ persistent.json # persistent config
+│   ├── hardware.txt   # System capabilities
+├── input\             # Source video storage
+├── output\            # Processed video output
+├── work\              # Temporary processing files
+```
 </details>
 
 ## Credits
