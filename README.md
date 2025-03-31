@@ -72,6 +72,7 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
 ```
 .\
 ├── README.md             # Project documentation
+├── requisites.py          # standalone installer script.
 ├── launcher.py           # Main program entry point
 ├── scripts\
 │   ├── interface.py     # Gradio UI implementation
