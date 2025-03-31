@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Tuple
 import os
 
-# Core Processing Configuration
 PROCESSING_CONFIG = {
     # Video Settings
     'preview_height': 360,
@@ -39,6 +38,12 @@ PROCESSING_CONFIG = {
         'target_length': 30,  # minutes
         'resolution_height': 720,
         'preview_height': 360
+    },
+    
+    # Hardware Acceleration
+    'hardware_acceleration': {
+        'use_opencl': True,  # Enable OpenCL by default for motion detection
+        'use_avx2': False    # Disable AVX2 by default unless explicitly supported
     }
 }
 

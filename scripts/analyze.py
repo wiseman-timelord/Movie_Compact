@@ -1,5 +1,6 @@
 # .\scripts\analyze.py
 
+# Imports...
 import cv2
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional, Generator, Union
@@ -9,7 +10,7 @@ from utility import (
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
     monitor_memory_usage, MemoryManager, ProgressMonitor, ErrorHandler,
-    CoreUtilities
+    CoreUtilities, AudioProcessor
 )
 from scripts.temporary import (
     ANALYSIS_CONFIG,
@@ -27,6 +28,7 @@ from collections import deque
 from scipy import signal
 import librosa
 
+# Classes...
 class ContentAnalyzer:
     """Advanced content analysis for video frames."""
     
@@ -128,11 +130,16 @@ class VideoAnalyzer:
     
     def __init__(self, log_manager=None):
         self.core = CoreUtilities()
-        # Update to use new config
         self.config = ANALYSIS_CONFIG
         self.scene_config = SCENE_CONFIG
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
+        
+        # Add hardware acceleration config
+        self.hardware_config = {
+            'OpenCL': PROCESSING_CONFIG.get('use_opencl', True),  # Default to True if not specified
+            'AVX2': PROCESSING_CONFIG.get('use_avx2', False)
+        }
         
         self.content_analyzer = ContentAnalyzer()
         self.scene_manager = SceneManager()
@@ -225,16 +232,37 @@ class VideoAnalyzer:
         return frames, audio
     
     def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray,
-                       target_duration: float) -> List[Dict[str, Any]]:
+                        target_duration: float) -> List[Dict[str, Any]]:
         """Process and analyze scenes."""
         self.progress.update_progress(40, "Processing scenes")
         scenes = []
+        
+        # Select motion detection method based on hardware config
+        if self.hardware_config['OpenCL']:
+            motion_detector = detect_motion_opencl
+        elif self.hardware_config['AVX2']:
+            motion_detector = detect_motion_avx2
+        else:
+            motion_detector = detect_motion_cpu
         
         for i, frame_group in enumerate(self._group_frames(frames)):
             if self.memory_manager.check_memory()['warning']:
                 self.memory_manager.cleanup()
             
-            scene = self._analyze_scene(frame_group, audio, target_duration, i/len(frames))
+            # Use the selected motion detector
+            # Assume frame_group has at least two frames for comparison
+            if len(frame_group) >= 2:
+                motion_detected = motion_detector(
+                    frame_group[0],  # Previous frame
+                    frame_group[-1], # Current frame
+                    self.config['motion_threshold']
+                )
+            else:
+                motion_detected = False
+            
+            scene = self._analyze_scene(frame_group, audio, target_duration, i / len(frames))
+            # Add motion detection result to scene data
+            scene['motion_detected'] = motion_detected
             scenes.append(scene)
             
             progress = 40 + (i + 1) / len(frames) * 40
@@ -243,19 +271,26 @@ class VideoAnalyzer:
         return self._merge_scenes(scenes)
     
 def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
+    """Group frames into scenes based on motion detection."""
+    # Select motion detection method
+    if self.hardware_config['OpenCL']:
+        motion_detector = detect_motion_opencl
+    elif self.hardware_config['AVX2']:
+        motion_detector = detect_motion_avx2
+    else:
+        motion_detector = detect_motion_cpu
+    
     scene_start = 0
     for i in range(1, len(frames)):
-        # Update this line to use config dictionary style access
-        if detect_motion_opencl(frames[i-1], frames[i], self.config['motion_threshold']):
-            # Update this line as well
-            if i - scene_start >= self.config['min_scene_duration'] * 30:
+        if motion_detector(frames[i-1], frames[i], self.config['motion_threshold']):
+            if i - scene_start >= self.config['min_scene_duration'] * 30:  # Assuming 30 FPS
                 yield frames[scene_start:i]
                 scene_start = i
-        if scene_start < len(frames):
-            yield frames[scene_start:]
+    if scene_start < len(frames):
+        yield frames[scene_start:]
     
     def _analyze_scene(self, frames: List[np.ndarray], audio: np.ndarray,
-                      target_duration: float, position: float) -> Dict[str, Any]:
+                       target_duration: float, position: float) -> Dict[str, Any]:
         """Analyze a single scene."""
         analysis = self.content_analyzer.analyze_frame(frames[len(frames)//2])  # Middle frame
         
@@ -265,6 +300,7 @@ def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray],
             'type': analysis['frame_type'],
             'complexity': analysis['complexity'],
             'motion': analysis['motion'],
+            'motion_detected': False,  # Will be overridden by _process_scenes
             'speed_factor': self._calculate_speed(analysis, target_duration, position)
         }
     

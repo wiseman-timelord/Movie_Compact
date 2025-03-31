@@ -1,5 +1,6 @@
 # process.py
 
+# Imports...
 from dataclasses import dataclass
 import cv2
 import numpy as np
@@ -38,6 +39,7 @@ from scripts.temporary import (
 from analyze import VideoAnalyzer
 from interface import ProcessingError
 
+# Classes...
 class VideoProcessor:
     """Handles video processing and consolidation operations."""
     

@@ -1,5 +1,6 @@
 # .\scripts\utility.py
 
+# Imports...
 import os
 import cv2
 import numpy as np
@@ -23,6 +24,27 @@ from scripts.temporary import (
     PROCESSING_CONFIG
 )
 
+# OpenCL setup (global for reuse)
+platform = cl.get_platforms()[0]
+device = platform.get_devices()[0]
+context = cl.Context([device])
+queue = cl.CommandQueue(context)
+
+# OpenCL kernel for frame difference
+kernel_code = """
+__kernel void frame_diff(__global const uchar *frame1, __global const uchar *frame2,
+                         __global uchar *diff, int width, int height) {
+    int x = get_global_id(0);
+    int y = get_global_id(1);
+    if (x < width && y < height) {
+        int idx = y * width + x;
+        diff[idx] = abs(frame1[idx] - frame2[idx]);
+    }
+}
+"""
+prg = cl.Program(context, kernel_code).build()
+
+# Classes...
 class CoreUtilities:
     def __init__(self):
         self.memory_manager = MemoryManager()
@@ -730,43 +752,32 @@ class SceneManager:
         return sum(weights[k] * scores[k] for k in weights)
 
 class PreviewGenerator:
-    """Handle preview video generation and management."""
-    
-    def __init__(self):
-        self.preview_height = PROCESSING_CONFIG['video_settings']['preview_height']
-        self.work_dir = PATHS['work']
-        self.memory_manager = MemoryManager()
+    def __init__(self, work_dir: str = 'work'):
+        self.work_dir = work_dir
+        os.makedirs(work_dir, exist_ok=True)
 
     def create_preview(self, input_path: str) -> str:
-        """Create lower resolution preview of video."""
+        """
+        Create a 360p preview of the video using ffmpeg.
+
+        Args:
+            input_path: Path to the input video.
+
+        Returns:
+            str: Path to the preview video if successful, otherwise an empty string.
+        """
         preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
-        
+        command = f'ffmpeg -i "{input_path}" -vf "scale=-1:360" -c:v libx264 -crf 23 -c:a aac -y "{preview_path}"'
+
         try:
-            import moviepy.editor as mp
-            clip = mp.VideoFileClip(input_path)
-            aspect_ratio = clip.w / clip.h
-            new_width = int(self.preview_height * aspect_ratio)
-            
-            preview = clip.resize(height=self.preview_height, width=new_width)
-            preview.write_videofile(
-                preview_path,
-                codec='libx264',
-                audio_codec='aac',
-                preset='ultrafast',
-                threads=4
-            )
-            
-            clip.close()
-            preview.close()
-            
-            # Clean up memory
-            self.memory_manager.cleanup()
-            
-            log_event(f"Created preview: {preview_path}", "INFO", "PREVIEW")
-            return preview_path
-            
-        except Exception as e:
-            log_event(f"Error creating preview: {e}", "ERROR", "PREVIEW")
+            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode == 0:
+                return preview_path
+            else:
+                print(f"ffmpeg failed with return code {result.returncode}")
+                return ""
+        except subprocess.CalledProcessError as e:
+            print(f"Error creating preview: {e}")
             return ""
 
     def generate_thumbnails(self, video_path: str, num_thumbnails: int = 5) -> List[str]:
@@ -802,13 +813,13 @@ class MetricsCollector:
     
     def __init__(self):
         self.metrics = {
-            'total_duration': 0,
-            'total_size': 0,
-            'processed_frames': 0,
-            'processing_time': 0,
-            'memory_usage': 0,
-            'phase_timings': {},
-            'file_metrics': {}
+            'total_duration': 0,           # Total duration of all files (seconds)
+            'total_size': 0,               # Total size of all files (bytes)
+            'processed_frames': 0,         # Total number of frames processed
+            'processing_time': 0,          # Total processing time (seconds)
+            'memory_usage': 0,             # Peak memory usage (bytes)
+            'phase_timings': {},           # Timings for each processing phase
+            'file_metrics': {}             # Metrics per file
         }
         self.start_time = datetime.datetime.now()
 
@@ -832,4 +843,146 @@ class MetricsCollector:
         }
 
     def end_phase_timing(self, phase_name: str) -> None:
-        """End timing
+        """End timing a processing phase and calculate duration."""
+        if phase_name in self.metrics['phase_timings']:
+            phase = self.metrics['phase_timings'][phase_name]
+            phase['end'] = datetime.datetime.now()
+            phase['duration'] = (phase['end'] - phase['start']).total_seconds()
+            self.metrics['processing_time'] += phase['duration']
+
+    def get_total_processing_time(self) -> float:
+        """Get total processing time in seconds since initialization."""
+        return (datetime.datetime.now() - self.start_time).total_seconds()
+
+    def get_summary(self) -> Dict[str, Any]:
+        """Get a summary of all collected metrics."""
+        summary = self.metrics.copy()
+        summary['total_processing_time'] = self.get_total_processing_time()
+        return summary
+        
+
+class PreviewGenerator:
+    def __init__(self, work_dir: str = 'work'):
+        self.work_dir = work_dir
+        os.makedirs(work_dir, exist_ok=True)
+
+    def create_preview(self, input_path: str) -> str:
+        """
+        Create a 360p preview of the video using ffmpeg.
+        
+        Args:
+            input_path: Path to input video.
+        
+        Returns:
+            str: Path to preview video.
+        """
+        preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
+        os.system(f'ffmpeg -i "{input_path}" -vf "scale=-1:360" -c:v libx264 -crf 23 '
+                  f'-c:a aac -y "{preview_path}"')
+        return preview_path
+
+class AudioProcessor:
+    def __init__(self, sample_rate: int = 44100):
+        self.sample_rate = sample_rate
+
+    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Reduce noise using spectral subtraction.
+        
+        Args:
+            audio: Input audio array (mono, float32).
+        
+        Returns:
+            np.ndarray: Noise-reduced audio.
+        """
+        # Estimate noise from first 0.5 seconds
+        noise_sample = audio[:int(0.5 * self.sample_rate)]
+        noise_stft = librosa.stft(noise_sample, n_fft=2048, hop_length=512)
+        noise_mag = np.mean(np.abs(noise_stft), axis=1, keepdims=True)
+        
+        # STFT of full audio
+        audio_stft = librosa.stft(audio, n_fft=2048, hop_length=512)
+        audio_mag, audio_phase = np.abs(audio_stft), np.angle(audio_stft)
+        
+        # Spectral subtraction
+        clean_mag = np.maximum(audio_mag - noise_mag, 0.0)
+        clean_stft = clean_mag * np.exp(1j * audio_phase)
+        
+        return librosa.istft(clean_stft, hop_length=512)
+
+    def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Enhance clarity using a bandpass filter for voice frequencies.
+        
+        Args:
+            audio: Input audio array (mono, float32).
+        
+        Returns:
+            np.ndarray: Clarity-enhanced audio.
+        """
+        # Bandpass filter for 1kHz–4kHz (voice range)
+        lowcut, highcut = 1000.0, 4000.0
+        nyquist = 0.5 * self.sample_rate
+        low, high = lowcut / nyquist, highcut / nyquist
+        b, a = butter(4, [low, high], btype='band')
+        enhanced_audio = lfilter(b, a, audio)
+        return enhanced_audio
+
+
+
+# Functions...
+def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """
+    Detect motion between two frames using OpenCL.
+    
+    Args:
+        frame1: First frame (grayscale, np.uint8).
+        frame2: Second frame (grayscale, np.uint8).
+        threshold: Mean difference threshold for motion detection.
+    
+    Returns:
+        bool: True if motion is detected, False otherwise.
+    """
+    mf = cl.mem_flags
+    frame1_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame1)
+    frame2_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame2)
+    diff_buf = cl.Buffer(context, mf.WRITE_ONLY, frame1.nbytes)
+    
+    prg.frame_diff(queue, frame1.shape, None, frame1_buf, frame2_buf, diff_buf,
+                   np.int32(frame1.shape[1]), np.int32(frame1.shape[0]))
+    
+    diff = np.empty_like(frame1)
+    cl.enqueue_copy(queue, diff, diff_buf).wait()
+    
+    return np.mean(diff) > threshold
+
+def detect_motion_avx2(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """
+    Detect motion using AVX2 (placeholder; requires intrinsics).
+    
+    Args:
+        frame1: First frame (grayscale, np.uint8).
+        frame2: Second frame (grayscale, np.uint8).
+        threshold: Mean difference threshold.
+    
+    Returns:
+        bool: True if motion is detected, False otherwise.
+    """
+    # TODO: Implement AVX2 vectorized differencing
+    diff = cv2.absdiff(frame1, frame2)  # Placeholder
+    return np.mean(diff) > threshold
+
+def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """
+    Fallback CPU-based motion detection.
+    
+    Args:
+        frame1: First frame (grayscale, np.uint8).
+        frame2: Second frame (grayscale, np.uint8).
+        threshold: Mean difference threshold.
+    
+    Returns:
+        bool: True if motion is detected, False otherwise.
+    """
+    diff = cv2.absdiff(frame1, frame2)
+    return np.mean(diff) > threshold
