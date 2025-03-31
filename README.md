@@ -52,6 +52,7 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
 ## Development
 <details>
   <summary>Expand Details ></summary>
+  ```
   The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
   1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
   1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
@@ -69,6 +70,7 @@ Movie Consolidator complements Movie Maker by handling large (>6 hour) video fil
       - Real-time playback for action sequences
   6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
   7. ) Clean output ready for example, clips to be loaded in movie maker for then the addition of titles/credits/intro/outro.
+  ```
 </details>
 
 ## Package Structure
