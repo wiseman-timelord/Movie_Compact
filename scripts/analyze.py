@@ -27,6 +27,7 @@ import time
 from collections import deque
 from scipy import signal
 import librosa
+import GLOBAL_STATE
 
 # Classes...
 class ContentAnalyzer:
@@ -282,7 +283,28 @@ class VideoAnalyzer:
             self.progress.update_progress(progress, f"Processed scene {i+1}")
         
         return self._merge_scenes(scenes)
-    
+
+class SceneAnalyzer:
+    def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
+        """
+        Group frames into scenes based on motion detection.
+
+        Args:
+            frames: List of video frames.
+
+        Yields:
+            List of frames per scene.
+        """
+        scene_start = 0
+        for i in range(1, len(frames)):
+            if self.motion_detector(frames[i-1], frames[i], self.config['motion_threshold']):
+                if i - scene_start >= self.config['min_scene_duration'] * GLOBAL_STATE.current_video.fps:
+                    yield frames[scene_start:i]
+                    scene_start = i
+        if scene_start < len(frames):
+            yield frames[scene_start:]
+
+# Functions...
 def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
     """Group frames into scenes based on motion detection."""
     # Select motion detection method

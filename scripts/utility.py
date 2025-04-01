@@ -1,17 +1,10 @@
 # .\scripts\utility.py
 
 # Imports...
-import os
-import cv2
+import os, cv2
 import numpy as np
 import pyopencl as cl
-import json
-import datetime
-import sys
-import psutil
-import librosa
-import shutil
-import gc
+import json, datetime, sys, psutil, librosa, shutil, gc
 from typing import Tuple, List, Dict, Any, Generator, Optional, Callable, Union
 from threading import Lock, Event
 import time
@@ -340,97 +333,79 @@ class ErrorHandler:
                 time.sleep(delay)
 
 class AudioProcessor:
-    """Enhanced audio processing capabilities."""
-    
-    def __init__(self):
-        self.sample_rate = AUDIO_CONFIG['sample_rate']
-        self.window_size = AUDIO_CONFIG['window_size']
-        self.hop_length = AUDIO_CONFIG['hop_length']
-        self.preserve_pitch = AUDIO_CONFIG['preserve_pitch']
-        self.enhance_audio = AUDIO_CONFIG['enhance_audio']
-        self.feature_settings = AUDIO_CONFIG['feature_settings']
+    def __init__(self, sample_rate: int = 44100):
+        self.sample_rate = sample_rate
+        self.settings = {}  # Assume settings are set elsewhere or passed in
 
-    def process_audio(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
-        """Process audio while maintaining quality."""
-        try:
-            # Normalize audio
-            audio = self._normalize_audio(audio)
-            
-            # Apply noise reduction if needed
-            if self.settings.get('audio', {}).get('noise_reduction', True):
-                audio = self._reduce_noise(audio)
-            
-            # Preserve pitch during speed change
-            if speed_factor != 1.0 and self.settings.get('audio', {}).get('preserve_pitch', True):
-                audio = self._preserve_pitch(audio, speed_factor)
-            
-            # Enhance clarity if enabled
-            if self.settings.get('audio', {}).get('enhance_clarity', True):
-                audio = self._enhance_clarity(audio)
-            
-            return audio
-            
-        except Exception as e:
-            log_event(f"Error processing audio: {e}", "ERROR", "AUDIO")
-            return audio
+    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Reduce noise using spectral subtraction.
+
+        Args:
+            audio: Input audio array (mono, float32).
+
+        Returns:
+            np.ndarray: Noise-reduced audio.
+        """
+        noise_sample = audio[:int(0.5 * self.sample_rate)]
+        noise_stft = librosa.stft(noise_sample, n_fft=2048, hop_length=512)
+        noise_mag = np.mean(np.abs(noise_stft), axis=1, keepdims=True)
+        audio_stft = librosa.stft(audio, n_fft=2048, hop_length=512)
+        audio_mag, audio_phase = np.abs(audio_stft), np.angle(audio_stft)
+        clean_mag = np.maximum(audio_mag - noise_mag, 0.0)
+        clean_stft = clean_mag * np.exp(1j * audio_phase)
+        return librosa.istft(clean_stft, hop_length=512)
+
+    def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Enhance clarity using a bandpass filter for voice frequencies.
+
+        Args:
+            audio: Input audio array (mono, float32).
+
+        Returns:
+            np.ndarray: Clarity-enhanced audio.
+        """
+        lowcut, highcut = 1000.0, 4000.0
+        nyquist = 0.5 * self.sample_rate
+        low, high = lowcut / nyquist, highcut / nyquist
+        b, a = butter(4, [low, high], btype='band')
+        return lfilter(b, a, audio)
 
     def _normalize_audio(self, audio: np.ndarray) -> np.ndarray:
         """Normalize audio levels."""
         return librosa.util.normalize(audio)
 
-    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
-        """Reduce background noise from audio."""
-        # Implement noise reduction algorithm
-        return audio
-
     def _preserve_pitch(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
         """Preserve audio pitch during speed changes."""
         if speed_factor == 1.0:
             return audio
-            
         return librosa.effects.time_stretch(audio, rate=speed_factor)
 
-    def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
-        """Enhance audio clarity."""
-        # Implement clarity enhancement
-        return audio
+    def process_audio(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
+        """
+        Process audio with noise reduction, pitch preservation, and clarity enhancement.
 
-    def analyze_audio_features(self, audio: np.ndarray) -> Dict[str, np.ndarray]:
-        """Extract detailed audio features for analysis."""
+        Args:
+            audio: Input audio array.
+            speed_factor: Speed adjustment factor.
+
+        Returns:
+            np.ndarray: Processed audio.
+        """
         try:
-            features = {}
-            
-            # Spectral centroid
-            features['spectral_centroid'] = librosa.feature.spectral_centroid(
-                y=audio,
-                sr=self.sample_rate,
-                hop_length=self.hop_length
-            )[0]
-            
-            # Spectral bandwidth
-            features['spectral_bandwidth'] = librosa.feature.spectral_bandwidth(
-                y=audio,
-                sr=self.sample_rate,
-                hop_length=self.hop_length
-            )[0]
-            
-            # Root mean square energy
-            features['rmse'] = librosa.feature.rms(
-                y=audio,
-                hop_length=self.hop_length
-            )[0]
-            
-            # Zero crossing rate
-            features['zero_crossing_rate'] = librosa.feature.zero_crossing_rate(
-                y=audio,
-                hop_length=self.hop_length
-            )[0]
-            
-            return features
-            
+            audio = self._normalize_audio(audio)
+            if self.settings.get('audio', {}).get('noise_reduction', True):
+                audio = self._reduce_noise(audio)
+            if speed_factor != 1.0 and self.settings.get('audio', {}).get('preserve_pitch', True):
+                audio = self._preserve_pitch(audio, speed_factor)
+            if self.settings.get('audio', {}).get('enhance_clarity', True):
+                audio = self._enhance_clarity(audio)
+            return audio
         except Exception as e:
-            log_event(f"Error analyzing audio features: {e}", "ERROR", "AUDIO")
-            return {}
+            # Replace with your logging mechanism
+            print(f"Error processing audio: {e}")
+            return audio
 
 # Original classes with updates
 class AudioAnalyzer:
@@ -645,31 +620,35 @@ class SceneManager:
         return scene
 
     def _detect_transitions(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-        """Detect and classify transitions between scenes."""
-        transitions = []
-        for i in range(1, len(frames)-1):
-            try:
-                # Calculate frame differences
-                diff_prev = cv2.absdiff(frames[i], frames[i-1])
-                diff_next = cv2.absdiff(frames[i], frames[i+1])
-                
-                # Detect transition type
-                if np.mean(diff_prev) < 5 and np.mean(diff_next) > 30:
-                    transitions.append({
-                        'frame': i,
-                        'type': 'cut',
-                        'confidence': 0.9
-                    })
-                elif np.mean(diff_prev) < np.mean(diff_next):
-                    transitions.append({
-                        'frame': i,
-                        'type': 'fade',
-                        'confidence': 0.7
-                    })
-            except Exception as e:
-                log_event(f"Error detecting transitions: {e}", "ERROR", "SCENE")
-                
-        return transitions
+            """
+            Detect scene transitions between frames.
+
+            Args:
+                frames: List of video frames.
+
+            Returns:
+                List of dictionaries with transition details.
+            """
+            transitions = []
+            for i in range(1, len(frames) - 1):
+                try:
+                    # Check frame consistency
+                    if frames[i].shape != frames[i-1].shape or frames[i].shape != frames[i+1].shape:
+                        # Replace with your logging mechanism
+                        print(f"Frame shape mismatch at index {i}", "WARNING", "SCENE")
+                        continue
+                    diff_prev = cv2.absdiff(frames[i], frames[i-1])
+                    diff_next = cv2.absdiff(frames[i], frames[i+1])
+                    mean_diff_prev = np.mean(diff_prev)
+                    mean_diff_next = np.mean(diff_next)
+                    if mean_diff_prev < 5 and mean_diff_next > 30:
+                        transitions.append({'frame': i, 'type': 'cut', 'confidence': 0.9})
+                    elif mean_diff_prev < mean_diff_next:
+                        transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
+                except Exception as e:
+                    # Replace with your logging mechanism
+                    print(f"Error detecting transitions at frame {i}: {e}", "WARNING", "SCENE")
+            return transitions
 
     def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge scenes that are too short."""

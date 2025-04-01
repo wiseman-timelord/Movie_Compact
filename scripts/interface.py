@@ -466,35 +466,56 @@ class InterfaceManager:
         self.batch_processor.cancel_processing()
         return "Batch processing cancelled"
 
-    def _save_settings(self, motion_threshold, min_scene_duration, max_speed,
-                       preserve_pitch, enhance_audio, use_opencl, use_avx2, use_aocl) -> str:
-        try:
-            new_settings = {
-                'motion_threshold': motion_threshold,
-                'min_scene_duration': min_scene_duration,
-                'max_speed_factor': max_speed,
-                'preserve_pitch': preserve_pitch,
-                'enhance_audio': enhance_audio,
-                'hardware_preferences': {
-                    'use_opencl': use_opencl,
-                    'use_avx2': use_avx2,
-                    'use_aocl': use_aocl
+    def _save_settings(self, motion_threshold: float, min_scene_duration: float, max_speed: float,
+                           preserve_pitch: bool, enhance_audio: bool, use_opencl: bool,
+                           use_avx2: bool, use_aocl: bool) -> str:
+            """
+            Save UI settings to persistent.json with validation.
+
+            Args:
+                motion_threshold: Threshold for motion detection (0–1).
+                min_scene_duration: Minimum scene length in seconds (>0).
+                max_speed: Maximum speed factor (≥1).
+                preserve_pitch: Whether to preserve audio pitch.
+                enhance_audio: Whether to enhance audio.
+                use_opencl: Enable OpenCL hardware acceleration.
+                use_avx2: Enable AVX2 hardware acceleration.
+                use_aocl: Enable AOCL hardware acceleration.
+
+            Returns:
+                str: Success or error message.
+            """
+            if not (0 <= motion_threshold <= 1):
+                return "Motion threshold must be between 0 and 1"
+            if min_scene_duration <= 0:
+                return "Minimum scene duration must be positive"
+            if max_speed < 1:
+                return "Maximum speed factor must be at least 1"
+
+            try:
+                new_settings = {
+                    'motion_threshold': motion_threshold,
+                    'min_scene_duration': min_scene_duration,
+                    'max_speed_factor': max_speed,
+                    'preserve_pitch': preserve_pitch,
+                    'enhance_audio': enhance_audio,
+                    'hardware_preferences': {
+                        'use_opencl': use_opencl,
+                        'use_avx2': use_avx2,
+                        'use_aocl': use_aocl
+                    }
                 }
-            }
-            
-            # Update global configuration
-            PROCESSING_CONFIG.update(new_settings)
-            AUDIO_CONFIG['preserve_pitch'] = new_settings['preserve_pitch']
-            AUDIO_CONFIG['enhance_audio'] = new_settings['enhance_audio']
-            
-            # Save to persistent.json
-            persistent_file = os.path.join("data", "persistent.json")
-            with open(persistent_file, "w") as f:
-                json.dump(new_settings, f, indent=4)
-            
-            return "Settings saved successfully"
-        except Exception as e:
-            return f"Error saving settings: {e}"
+                # Update global configurations (adjust based on your imports)
+                PROCESSING_CONFIG.update(new_settings)
+                AUDIO_CONFIG['preserve_pitch'] = preserve_pitch
+                AUDIO_CONFIG['enhance_audio'] = enhance_audio
+
+                persistent_file = os.path.join("data", "persistent.json")
+                with open(persistent_file, "w") as f:
+                    json.dump(new_settings, f, indent=4)
+                return "Settings saved successfully"
+            except Exception as e:
+                return f"Error saving settings: {e}"
 
     def _reset_settings(self) -> List[Any]:
         """Reset settings to defaults."""
