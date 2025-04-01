@@ -74,7 +74,6 @@ The program is supposed to consolidate very large video clips into action-packed
 ├── data\              # Configuration and logging
 │   ├── events.txt     # Progress and debug logs
 │   ├─ persistent.json # persistent config
-│   ├── hardware.txt   # System capabilities
 ├── input\             # Source video storage
 ├── output\            # Processed video output
 ├── work\              # Temporary processing files
