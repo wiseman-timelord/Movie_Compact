@@ -10,7 +10,7 @@ A sophisticated video processing application that creates condensed, action-focu
 - **Dynamic Speed Control**: Smart speed adjustment system with smooth transitions
 - **Configurable Parameters**: Comprehensive settings for all processing aspects
 - **Universal Format Support**: Handles MP4, AVI, MKV video formats
-- **Hardware Acceleration**: Optimized processing using AVX2 and OpenCL
+- **Hardware Acceleration**: Optimized processing using AVX2 and OpenCL.
 - **Memory Management**: Efficient handling of large video files
 - **Real-time Monitoring**: Live progress tracking and status updates
 
@@ -32,7 +32,8 @@ A sophisticated video processing application that creates condensed, action-focu
 3. TBA.
 
 ## Notation
-Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
+- Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
+- Link for AOCL (AVX/2/512 Enhancement): https://www.amd.com/en/developer/aocl.html
 
 ## Development
 The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
