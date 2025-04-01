@@ -33,7 +33,7 @@ A sophisticated video processing application that creates condensed, action-focu
 
 ## Notation
 - Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
-- Link for, information and downloading of, the [AOCL the AVX/2/512 enhancement](https://www.amd.com/en/developer/aocl.html) on AMD.Com.
+- Link for, information about and downloading of, the AVX/2/512 enhancement [AOCL](https://www.amd.com/en/developer/aocl.html) on AMD.Com.
 
 ## Development
 The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
