@@ -19,12 +19,7 @@ A sophisticated video processing application that creates condensed, action-focu
 
 ## Requirements
 - **Python 3.8+**
-- **Core Libraries**: 
-  - OpenCV (video processing)
-  - moviepy (video editing)
-  - Gradio (interface)
-  - librosa (audio analysis)
-- **OS**: Windows (optimized for gaming systems)
+- **OS**: Windows v?
 - **Hardware**: 
   - x64 architecture
   - AVX2 support
@@ -32,19 +27,9 @@ A sophisticated video processing application that creates condensed, action-focu
   - Minimum 8GB RAM recommended
 
 ## Usage
-1. **Installation**:
-   - Clone the repository
-   - Run batch as Administrator
-   - Select option 2 (installer.py)
-   - Verify installation completion
-
-2. **Running the Program**:
-   - Launch batch as Administrator
-   - Select option 1 (launcher.py)
-   - Open browser to Gradio interface
-   - Configure processing settings
-   - Monitor consolidation progress
-   - Review output file
+1. Run the batch and select the install process, ensure to check that things install correctly.
+2. Affter installation completes successfully, then run the launcher, the interface will then load...
+3. TBA.
 
 ## Notation
 Movie Consolidator complements Movie Maker by handling large (>6 hour) video files effectively, enabling seamless post-processing in Movie Maker.
@@ -72,8 +57,9 @@ The program is supposed to consolidate very large video clips into action-packed
 ```
 .\
 ├── README.md             # Project documentation
-├── requisites.py          # standalone installer script.
 ├── launcher.py           # Main program entry point
+├── requisites.py         # standalone installer script.
+├── Movie_Compact.bat     # The Batch launcher for, `launcher.py` and `requisites.py`.
 ├── scripts\
 │   ├── interface.py     # Gradio UI implementation
 │   ├── analyze.py       # Video/audio analysis
