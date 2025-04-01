@@ -931,6 +931,20 @@ class AudioProcessor:
 
 
 # Functions...
+def load_hardware_config():
+    """Load hardware capabilities from hardware.json."""
+    hardware_file = os.path.join(BASE_DIR, "data", "hardware.json")
+    try:
+        with open(hardware_file, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        log_event("Hardware configuration file not found, assuming default capabilities", "WARNING", "CONFIG")
+        return {"x64": True, "AVX2": False, "AOCL": False, "OpenCL": False}
+    except json.JSONDecodeError as e:
+        log_event(f"Error decoding hardware.json: {e}", "ERROR", "CONFIG")
+        return {"x64": True, "AVX2": False, "AOCL": False, "OpenCL": False}
+
+
 def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
     """
     Detect motion between two frames using OpenCL.

@@ -1,7 +1,15 @@
+# Script: `.\scripts\temporary.py`
+
+# Imports...
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Tuple
 import os
 
+# Globals...
+GLOBAL_STATE = GlobalState()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Maps etc...
 PROCESSING_CONFIG = {
     # Video Settings
     'preview_height': 360,
@@ -215,9 +223,6 @@ class GlobalState:
         self.memory_usage = 0.0
         self.is_processing = False
         self.cancel_requested = False
-
-# Initialize global state
-GLOBAL_STATE = GlobalState()
 
 def get_full_path(path_key: str) -> str:
     """Get full path for a path key."""

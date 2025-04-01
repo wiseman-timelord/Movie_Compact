@@ -126,20 +126,14 @@ class ContentAnalyzer:
         return 'gameplay'
 
 class VideoAnalyzer:
-    """Handles video analysis operations."""
-    
     def __init__(self, log_manager=None):
         self.core = CoreUtilities()
         self.config = ANALYSIS_CONFIG
         self.scene_config = SCENE_CONFIG
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
-        
-        # Add hardware acceleration config
-        self.hardware_config = {
-            'OpenCL': PROCESSING_CONFIG.get('use_opencl', True),  # Default to True if not specified
-            'AVX2': PROCESSING_CONFIG.get('use_avx2', False)
-        }
+        self.hardware_capabilities = load_hardware_config()  # Load detected capabilities
+        self.settings = load_settings()  # Load user settings
         
         self.content_analyzer = ContentAnalyzer()
         self.scene_manager = SceneManager()
@@ -151,6 +145,25 @@ class VideoAnalyzer:
         self.log_manager = log_manager
         self.frame_buffer = deque(maxlen=self.memory_config['frame_buffer_size'])
 
+    def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray,
+                        target_duration: float) -> List[Dict[str, Any]]:
+        self.progress.update_progress(40, "Processing scenes")
+        scenes = []
+        
+        # Select motion detection method based on capabilities and preferences
+        prefs = self.settings.get('hardware_preferences', {})
+        if (prefs.get('use_opencl', True) and 
+            self.hardware_capabilities.get('OpenCL', False)):
+            motion_detector = detect_motion_opencl
+            self.log_manager.log("Using OpenCL for motion detection", "INFO", "HARDWARE")
+        elif (prefs.get('use_avx2', True) and 
+              self.hardware_capabilities.get('AVX2', False)):
+            motion_detector = detect_motion_avx2
+            self.log_manager.log("Using AVX2 for motion detection", "INFO", "HARDWARE")
+        else:
+            motion_detector = detect_motion_cpu
+            self.log_manager.log("Using CPU for motion detection", "INFO", "HARDWARE")
+    
     def analyze_video(self, video_path: str, target_duration: float) -> Dict[str, Any]:
         """Analyze video content and structure."""
         try:

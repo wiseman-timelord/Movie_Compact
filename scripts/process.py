@@ -34,21 +34,22 @@ from scripts.temporary import (
     MEMORY_CONFIG,
     GLOBAL_STATE,
     SceneData,
-    update_processing_state
+    update_processing_state,
+    BASE_DIR
 )
 from analyze import VideoAnalyzer
 from interface import ProcessingError
 
 # Classes...
 class VideoProcessor:
-    """Handles video processing and consolidation operations."""
-    
     def __init__(self, log_manager=None):
         self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
         self.speed_config = SPEED_CONFIG
         self.memory_config = MEMORY_CONFIG
+        self.hardware_capabilities = load_hardware_config()
+        self.settings = load_settings()
         
         self.analyzer = VideoAnalyzer(log_manager)
         self.audio_processor = AudioProcessor()

@@ -37,13 +37,12 @@ class MovieCompactError(Exception):
     pass
 
 class InterfaceManager:
-    """Manage Gradio interface and user interactions."""
-    
     def __init__(self, log_manager: Optional[LogManager] = None):
         self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.progress_config = PROGRESS_CONFIG
         self.error_config = ERROR_CONFIG
+        self.hardware_capabilities = load_hardware_config()  # Load hardware capabilities
         
         self.processor = VideoProcessor(log_manager)
         self.batch_processor = BatchProcessor()
@@ -213,6 +212,23 @@ class InterfaceManager:
                         label="Enhance Audio Quality"
                     )
 
+            # Hardware Preferences
+            with gr.Row():
+                with gr.Column():
+                    gr.Markdown("### Hardware Preferences")
+                    self.use_opencl = gr.Checkbox(
+                        value=self.config.get("hardware_preferences", {}).get("use_opencl", True),
+                        label=f"Use OpenCL ({'available' if self.hardware_capabilities.get('OpenCL', False) else 'not available'})"
+                    )
+                    self.use_avx2 = gr.Checkbox(
+                        value=self.config.get("hardware_preferences", {}).get("use_avx2", True),
+                        label=f"Use AVX2 ({'available' if self.hardware_capabilities.get('AVX2', False) else 'not available'})"
+                    )
+                    self.use_aocl = gr.Checkbox(
+                        value=self.config.get("hardware_preferences", {}).get("use_aocl", True),
+                        label=f"Use AOCL ({'available' if self.hardware_capabilities.get('AOCL', False) else 'not available'})"
+                    )
+
             with gr.Row():
                 self.save_settings_btn = gr.Button(
                     "Save Settings",
@@ -310,27 +326,33 @@ class InterfaceManager:
 
         # Settings handlers
         self.save_settings_btn.click(
-            fn=self._save_settings,
-            inputs=[
-                self.motion_threshold,
-                self.min_scene_duration,
-                self.max_speed,
-                self.preserve_pitch,
-                self.enhance_audio
-            ],
-            outputs=[self.status_output]
-        )
+                fn=self._save_settings,
+                inputs=[
+                    self.motion_threshold,
+                    self.min_scene_duration,
+                    self.max_speed,
+        .When the user changes these settings in the Gradio interface, they are saved to persistent.json, and the program uses these preferences alongside the detected hardware capabilities to decide which processing methods to employself.preserve_pitch,
+                    self.enhance_audio,
+                    self.use_opencl,
+                    self.use_avx2,
+                    self.use_aocl
+                ],
+                outputs=[self.status_output]
+            )
 
-        self.reset_settings_btn.click(
-            fn=self._reset_settings,
-            outputs=[
-                self.motion_threshold,
-                self.min_scene_duration,
-                self.max_speed,
-                self.preserve_pitch,
-                self.enhance_audio
-            ]
-        )
+            self.reset_settings_btn.click(
+                fn=self._reset_settings,
+                outputs=[
+                    self.motion_threshold,
+                    self.min_scene_duration,
+                    self.max_speed,
+                    self.preserve_pitch,
+                    self.enhance_audio,
+                    self.use_opencl,
+                    self.use_avx2,
+                    self.use_aocl
+                ]
+            )
 
         # Log handlers
         self.refresh_log_btn.click(
@@ -444,20 +466,31 @@ class InterfaceManager:
         self.batch_processor.cancel_processing()
         return "Batch processing cancelled"
 
-    def _save_settings(self, *args) -> str:
+    def _save_settings(self, motion_threshold, min_scene_duration, max_speed,
+                       preserve_pitch, enhance_audio, use_opencl, use_avx2, use_aocl) -> str:
         try:
             new_settings = {
-                'motion_threshold': args[0],
-                'min_scene_duration': args[1],
-                'max_speed_factor': args[2],
-                'preserve_pitch': args[3],
-                'enhance_audio': args[4]
+                'motion_threshold': motion_threshold,
+                'min_scene_duration': min_scene_duration,
+                'max_speed_factor': max_speed,
+                'preserve_pitch': preserve_pitch,
+                'enhance_audio': enhance_audio,
+                'hardware_preferences': {
+                    'use_opencl': use_opencl,
+                    'use_avx2': use_avx2,
+                    'use_aocl': use_aocl
+                }
             }
             
             # Update global configuration
             PROCESSING_CONFIG.update(new_settings)
             AUDIO_CONFIG['preserve_pitch'] = new_settings['preserve_pitch']
             AUDIO_CONFIG['enhance_audio'] = new_settings['enhance_audio']
+            
+            # Save to persistent.json
+            persistent_file = os.path.join("data", "persistent.json")
+            with open(persistent_file, "w") as f:
+                json.dump(new_settings, f, indent=4)
             
             return "Settings saved successfully"
         except Exception as e:
@@ -470,7 +503,10 @@ class InterfaceManager:
             self.config.min_scene_duration,
             self.config.max_speed_factor,
             self.config.preserve_pitch,
-            self.config.enhance_audio
+            self.config.enhance_audio,
+            True,  # use_opencl
+            True,  # use_avx2
+            True   # use_aocl
         ]
 
     def _refresh_log(self) -> Tuple[str, str]:

@@ -18,19 +18,19 @@ def log_event(message):
         f.write(f"[{timestamp}] {message}\n")
 
 def detect_hardware():
-    """Detect system hardware capabilities and save to hardware.txt."""
+    """Detect system hardware capabilities and save to hardware.json."""
     print("Detecting hardware capabilities...")
     hardware_info = {
         "x64": platform.machine().endswith("64"),
-        "Avx2": False,
-        "Aocl": False,
+        "AVX2": False,  # Corrected key case to match convention
+        "AOCL": False,  # Corrected key case
         "OpenCL": False,
     }
 
     try:
         import cpuinfo
         cpu_info = cpuinfo.get_cpu_info()
-        hardware_info["Avx2"] = "avx2" in cpu_info.get("flags", [])
+        hardware_info["AVX2"] = "avx2" in cpu_info.get("flags", [])
     except Exception as e:
         log_event(f"Error detecting AVX2: {e}")
         print(f"Error detecting AVX2: {e}")
@@ -40,17 +40,16 @@ def detect_hardware():
         platforms = cl.get_platforms()
         hardware_info["OpenCL"] = len(platforms) > 0
         if hardware_info["OpenCL"]:
-            hardware_info["Aocl"] = any("AMD" in p.name for p in platforms)
+            hardware_info["AOCL"] = any("AMD" in p.name for p in platforms)
     except Exception as e:
         log_event(f"Error detecting OpenCL: {e}")
         print(f"Error detecting OpenCL: {e}")
 
-    hardware_file = os.path.join(BASE_DIR, "data", "hardware.txt")
+    hardware_file = os.path.join(BASE_DIR, "data", "hardware.json")
     with open(hardware_file, "w") as f:
-        for key, value in hardware_info.items():
-            f.write(f"{key}: {value}\n")
-    log_event("Hardware configuration saved to hardware.txt")
-    print("Hardware configuration saved to hardware.txt")
+        json.dump(hardware_info, f, indent=4)
+    log_event("Hardware configuration saved to hardware.json")
+    print("Hardware configuration saved to hardware.json")
     return hardware_info
 
 def ensure_directories():
@@ -85,20 +84,27 @@ def create_persistent_json():
         "video_settings": {
             "target_fps": 30,
             "min_clip_length": 2,
-            "target_length": 30,  # minutes
+            "target_length": 30,
             "resolution_height": 720,
             "codec": "libx264",
             "audio_codec": "aac",
-            "preview_height": 360  # height for preview processing
+            "preview_height": 360
         },
 
-        # Processing settings
+        # Processing settings (existing)
         "processor_settings": {
             "use_gpu": True,
             "cpu_cores": 4,
             "opencl_enabled": True,
             "avx2_enabled": True,
             "gpu_batch_size": 32
+        },
+
+        # Add hardware preferences
+        "hardware_preferences": {
+            "use_opencl": True,
+            "use_avx2": True,
+            "use_aocl": True
         },
 
         # File paths
@@ -110,17 +116,17 @@ def create_persistent_json():
 
         # Scene detection
         "scene_settings": {
-            "min_scene_length": 2,    # seconds
-            "max_scene_length": 300,   # seconds
-            "scene_threshold": 30.0,   # threshold for scene change detection
-            "action_threshold": 0.3    # threshold for action sequence detection
+            "min_scene_length": 2,
+            "max_scene_length": 300,
+            "scene_threshold": 30.0,
+            "action_threshold": 0.3
         },
 
         # Speed adjustment
         "speed_settings": {
-            "max_speed_factor": 4.0,   # maximum speedup for non-action scenes
-            "min_speed_factor": 1.0,   # minimum speedup (normal speed)
-            "transition_frames": 30     # frames for speed transition
+            "max_speed_factor": 4.0,
+            "min_speed_factor": 1.0,
+            "transition_frames": 30
         }
     }
 
@@ -158,7 +164,7 @@ def verify_installation():
     """Verify all required files and directories exist."""
     print("\nVerifying installation...")
     required_dirs = [os.path.join(BASE_DIR, d) for d in ["data", "input", "output", "work", "scripts"]]
-    required_files = [os.path.join(BASE_DIR, "data", f) for f in ["persistent.json", "requirements.txt", "hardware.txt", "events.txt"]]
+    required_files = [os.path.join(BASE_DIR, "data", f) for f in ["persistent.json", "requirements.txt", "hardware.json", "events.txt"]]
     
     status = True
     
@@ -181,24 +187,6 @@ def verify_installation():
         print("Installation verification failed!")
         log_event("Installation verification failed")
     return status
-
-def install_requirements():
-    """Install required packages from requirements.txt."""
-    print("\nInstalling requirements...")
-    req_file = os.path.join(BASE_DIR, "data", "requirements.txt")
-    try:
-        # Upgrade pip first
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-        # Install requirements
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
-        log_event("Requirements installed successfully")
-        print("Requirements installed successfully.")
-        return True
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Error: Failed to install requirements. {e}"
-        log_event(error_msg)
-        print(error_msg)
-        return False
 
 def main():
     """Main function to orchestrate the installation process."""
