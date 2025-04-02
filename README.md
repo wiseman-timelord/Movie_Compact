@@ -66,6 +66,7 @@ The program is supposed to consolidate very large video clips into action-packed
 │   ├── analyze.py       # Video/audio analysis
 │   ├── process.py       # Video processing engine
 │   ├── utility.py       # Support functions/classes
+│   ├── exceptions.py    # Exception Reports
 │   ├── temporary.py    # globals and runtime config
 ```
 
