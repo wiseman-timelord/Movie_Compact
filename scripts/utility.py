@@ -1,15 +1,14 @@
 # .\scripts\utility.py
 
 # Imports...
-import os, cv2
+import os, cv2, ime
 import numpy as np
 import pyopencl as cl
 import json, datetime, sys, psutil, librosa, shutil, gc
 from typing import Tuple, List, Dict, Any, Generator, Optional, Callable, Union
 from threading import Lock, Event
-import time
 from queue import Queue
-from interface import HardwareError, ConfigurationError, MovieCompactError
+from scripts.exceptions import (HardwareError, ConfigurationError, MovieCompactError)
 from scripts.temporary import (
     MEMORY_CONFIG,
     ERROR_CONFIG,
@@ -70,11 +69,13 @@ class MemoryManager:
             }
             
             if status['warning']:
-                log_event(f"High memory usage: {memory_percent:.1f}%", "WARNING", "MEMORY")
+                print(f"Warning: High memory usage: {memory_percent:.1f}%")  # Replaced log_event
+                time.sleep(3)
             
             return status
         except Exception as e:
-            log_event(f"Error checking memory: {e}", "ERROR", "MEMORY")
+            print(f"Error: Checking memory failed - {e}")  # Replaced log_event
+            time.sleep(5)
             return {'safe': False, 'warning': True, 'critical': False, 'usage_percent': 0, 'available_gb': 0}
 
     def cleanup(self, force: bool = False) -> bool:
@@ -91,10 +92,12 @@ class MemoryManager:
                 # Reset last cleanup time
                 self._last_cleanup = current_time
                 
-                log_event("Memory cleanup performed", "INFO", "MEMORY")
+                print("Info: Memory cleanup performed")  # Replaced log_event
+                time.sleep(1)
                 return True
             except Exception as e:
-                log_event(f"Error during memory cleanup: {e}", "ERROR", "MEMORY")
+                print(f"Error: Memory cleanup error - {e}")  # Replaced log_event
+                time.sleep(5)
                 return False
         return False
 
@@ -407,7 +410,6 @@ class AudioProcessor:
             print(f"Error processing audio: {e}")
             return audio
 
-# Original classes with updates
 class AudioAnalyzer:
     def __init__(self):
         self.threshold = AUDIO_CONFIG['threshold']
@@ -910,6 +912,25 @@ class AudioProcessor:
 
 
 # Functions...
+def cleanup_work_directory() -> None:
+    """Silently clean and recreate the work directory."""
+    work_dir = "work"
+    shutil.rmtree(work_dir, ignore_errors=True)  # Force delete without raising errors
+    os.makedirs(work_dir, exist_ok=True)  
+        
+def load_settings() -> Dict[str, Any]:
+    """Load settings from persistent.json."""
+    settings_path = os.path.join(BASE_DIR, "data", "persistent.json")
+    try:
+        with open(settings_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        log_event("Settings file not found, using defaults", "WARNING", "SETTINGS")
+        return {}
+    except json.JSONDecodeError as e:
+        log_event(f"Error decoding settings: {e}", "ERROR", "SETTINGS")
+        return {}
+
 def load_hardware_config():
     """Load hardware capabilities from hardware.json."""
     hardware_file = os.path.join(BASE_DIR, "data", "hardware.json")
@@ -979,3 +1000,50 @@ def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) 
     """
     diff = cv2.absdiff(frame1, frame2)
     return np.mean(diff) > threshold
+    
+def extract_frames_optimized(video_path: str, batch_size: int = 32) -> Generator[np.ndarray, None, None]:
+    """
+    Optimized frame extraction with batch processing and hardware acceleration.
+    
+    Args:
+        video_path: Path to video file
+        batch_size: Number of frames to process in each batch
+        
+    Yields:
+        Frames in BGR format
+    """
+    try:
+        # Try hardware-accelerated decoding first
+        cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(video_path)  # Fallback to default
+
+        frame_buffer = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Convert to RGB for consistency with other processing
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_buffer.append(frame)
+
+            # Process in batches for memory efficiency
+            if len(frame_buffer) >= batch_size:
+                for f in frame_buffer:
+                    yield f
+                frame_buffer = []
+
+                # Check memory usage periodically
+                if MemoryManager().check_memory()['warning']:
+                    MemoryManager().cleanup(force=True)
+
+        # Yield remaining frames
+        for f in frame_buffer:
+            yield f
+
+        cap.release()
+        
+    except Exception as e:
+        log_event(f"Frame extraction error: {e}", "ERROR", "FRAMES")
+        raise MovieCompactError(f"Frame extraction failed: {e}")

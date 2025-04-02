@@ -1,18 +1,16 @@
 # process.py
 
 # Imports...
+import cv2, time, os
 from dataclasses import dataclass
-import cv2
 import numpy as np
 import moviepy.editor as mp
 from typing import Dict, Any, Optional, List, Tuple, Callable, Union
 from queue import Queue
 from threading import Event, Lock
 from typing import List, Tuple
-import time
-import os
-from analyze import VideoAnalyzer
-from interface import ProcessingError
+from scripts.analyze import VideoAnalyzer
+from scripts.exceptions import ProcessingError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scripts.temporary import (
     PROCESSING_CONFIG,
@@ -26,7 +24,6 @@ from scripts.temporary import (
 )
 from utility import (
     load_settings,
-    log_event,
     cleanup_work_directory,
     ProgressMonitor,
     MetricsCollector,
@@ -273,39 +270,6 @@ class VideoProcessor:
             self.error_handler.handle_error(e, "speed_transition")
             return clip.speedx(end_speed)
 
-    def _create_smooth_transition(self, clip1: mp.VideoFileClip, 
-                                clip2: mp.VideoFileClip,
-                                transition_frames: int = 30) -> mp.VideoFileClip:
-        """Create smooth transition between clips."""
-        try:
-            if clip1.duration < 1 or clip2.duration < 1:
-                return mp.concatenate_videoclips([clip1, clip2])
-                
-            # Create transition frames
-            transition_duration = transition_frames / clip1.fps
-            fade_out = clip1.subclip(-transition_duration)
-            fade_in = clip2.subclip(0, transition_duration)
-            
-            # Create blended frames
-            frames = []
-            for i in range(transition_frames):
-                progress = i / transition_frames
-                frame1 = fade_out.get_frame(i/clip1.fps)
-                frame2 = fade_in.get_frame(i/clip2.fps)
-                blended = frame1 * (1-progress) + frame2 * progress
-                frames.append(blended)
-                
-            transition = mp.ImageSequenceClip(frames, fps=clip1.fps)
-            
-            # Combine clips with transition
-            final = mp.concatenate_videoclips([
-                clip1.subclip(0, -transition_duration),
-                transition,
-                clip2.subclip(transition_duration)
-            ])
-            
-            return final
-
 
     def _process_audio(self, clip: mp.VideoFileClip,
                       speed_factor: float) -> mp.VideoFileClip:
@@ -365,7 +329,8 @@ class VideoProcessor:
     def cancel_processing(self) -> None:
         """Cancel current processing operation."""
         self.cancel_flag.set()
-        log_event("Processing cancelled by user", "INFO", "CONTROL")
+        print("Info: Processing cancelled by user")  # Replaced log_event
+        time.sleep(1)
 
     def validate_output(self, output_path: str, target_duration: float) -> bool:
         """Validate the processed video."""
@@ -377,12 +342,8 @@ class VideoProcessor:
             # Check duration
             duration_diff = abs(duration - target_duration)
             if duration_diff > 1800:  # 30 minutes
-                log_event(
-                    f"Output duration {duration:.1f}s differs significantly from "
-                    f"target {target_duration:.1f}s",
-                    "WARNING",
-                    "VALIDATION"
-                )
+                print(f"Warning: Output duration {duration:.1f}s differs from target {target_duration:.1f}s")  # Replaced log_event
+                time.sleep(3)
                 return False
 
             # Verify file integrity
@@ -394,8 +355,8 @@ class VideoProcessor:
             # Verify file size
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
             if size_mb < 1:
-                log_event(f"Output file too small: {size_mb:.1f}MB",
-                         "ERROR", "VALIDATION")
+                print(f"Error: Output file too small: {size_mb:.1f}MB")  # Replaced log_event
+                time.sleep(5)
                 return False
 
             return True
@@ -403,6 +364,7 @@ class VideoProcessor:
         except Exception as e:
             self.error_handler.handle_error(e, "output_validation")
             return False
+
 
     def _create_smooth_transition(self, clip1: mp.VideoFileClip, 
                                 clip2: mp.VideoFileClip,
@@ -561,40 +523,40 @@ def _process_parallel(self, files: List[Tuple[str, str, float]]) -> None:
                 except Exception as e:
                     self.error_handler.handle_error(e, "batch_monitoring")
 
-    def get_queue_status(self) -> List[Dict[str, Any]]:
-        """Get current status of processing queue."""
-        status_list = []
-        for file_path, info in self.queue_status.items():
-            status_list.append({
-                'name': os.path.basename(file_path),
-                'status': info['status'],
-                'progress': info['progress']
-            })
-        return status_list
+        def get_queue_status(self) -> List[Dict[str, Any]]:
+            """Get current status of processing queue."""
+            status_list = []
+            for file_path, info in self.queue_status.items():
+                status_list.append({
+                    'name': os.path.basename(file_path),
+                    'status': info['status'],
+                    'progress': info['progress']
+                })
+            return status_list
 
-    def _update_batch_progress(self, file_path: str, progress: float) -> None:
-        """Update progress for a specific file in the batch."""
-        with self.processing_lock:
-            self.queue_status[file_path]['progress'] = progress
-            
-            # Calculate overall progress
-            total_progress = sum(
-                info['progress'] for info in self.queue_status.values()
-            )
-            overall_progress = total_progress / len(self.queue_status)
-            
-            if self.progress_callback:
-                self.progress_callback(
-                    'Batch Processing',
-                    overall_progress,
-                    f"Completed {self.completed_files}/{self.total_files} files"
+        def _update_batch_progress(self, file_path: str, progress: float) -> None:
+            """Update progress for a specific file in the batch."""
+            with self.processing_lock:
+                self.queue_status[file_path]['progress'] = progress
+                
+                # Calculate overall progress
+                total_progress = sum(
+                    info['progress'] for info in self.queue_status.values()
                 )
+                overall_progress = total_progress / len(self.queue_status)
+                
+                if self.progress_callback:
+                    self.progress_callback(
+                        'Batch Processing',
+                        overall_progress,
+                        f"Completed {self.completed_files}/{self.total_files} files"
+                    )
 
-    def cancel_processing(self) -> None:
-        """Cancel batch processing."""
-        self.active = False
-        self.processor.cancel_processing()
-        while not self.queue.empty():
-            self.queue.get()
-            self.queue.task_done()
-            
+        def cancel_processing(self) -> None:
+            """Cancel batch processing."""
+            self.active = False
+            self.processor.cancel_processing()
+            while not self.queue.empty():
+                self.queue.get()
+                self.queue.task_done()
+                

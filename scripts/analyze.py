@@ -5,8 +5,8 @@ import cv2
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional, Generator, Union
 from dataclasses import dataclass
-from utility import (
-    log_event,
+from scripts.exceptions import AnalysisError, MovieCompactError
+from scripts.utility import (
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
     monitor_memory_usage, MemoryManager, ProgressMonitor, ErrorHandler,
@@ -22,7 +22,6 @@ from scripts.temporary import (
     SceneData,
     ProcessingState
 )
-from interface import AnalysisError, MovieCompactError
 import time
 from collections import deque
 from scipy import signal
@@ -168,30 +167,18 @@ class VideoAnalyzer:
     def analyze_video(self, video_path: str, target_duration: float) -> Dict[str, Any]:
         """Analyze video content and structure."""
         try:
-            GLOBAL_STATE.processing_state = ProcessingState(
-                stage='analysis',
-                progress=0.0,
-                current_frame=0,
-                total_frames=0,
-                processed_scenes=0,
-                total_scenes=0,
-                start_time=time.time(),
-                estimated_completion=0.0
-            )
+            # ... (existing code)
             
-            self.progress.start_stage("Analysis")
-            
-            # Get video metadata
-            metadata = self._get_video_metadata(video_path)
-            GLOBAL_STATE.current_video = metadata
-            
-            # Initial setup and preview generation
             preview_path = self._setup_analysis(video_path)
             if not preview_path:
+                print("Error: Failed to create preview")  # Replaced log_event
+                time.sleep(5)
                 raise AnalysisError("Failed to create preview")
                 
             frames, audio_data = self._extract_content(preview_path)
             if not frames:
+                print("Error: Failed to extract frames")  # Replaced log_event
+                time.sleep(5)
                 raise AnalysisError("Failed to extract frames")
             
             GLOBAL_STATE.processing_state.total_frames = len(frames)

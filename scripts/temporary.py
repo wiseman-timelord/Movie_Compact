@@ -6,7 +6,6 @@ from typing import Dict, Any, List, Optional, Tuple
 import os
 
 # Globals...
-GLOBAL_STATE = GlobalState()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Maps etc...
@@ -224,6 +223,27 @@ class GlobalState:
         self.is_processing = False
         self.cancel_requested = False
 
+class GlobalState:
+    """Global processing state manager."""
+    def __init__(self):
+        self.current_video: Optional[VideoMetadata] = None
+        self.processing_state: Optional[ProcessingState] = None
+        self.detected_scenes: List[SceneData] = []
+        self.memory_usage: float = 0.0
+        self.is_processing: bool = False
+        self.cancel_requested: bool = False
+
+    def reset(self):
+        """Reset global state."""
+        self.current_video = None
+        self.processing_state = None
+        self.detected_scenes = []
+        self.memory_usage = 0.0
+        self.is_processing = False
+        self.cancel_requested = False
+GLOBAL_STATE = GlobalState()   # - Do not move above GlobalState
+
+# Functions...
 def get_full_path(path_key: str) -> str:
     """Get full path for a path key."""
     return os.path.abspath(PATHS[path_key])

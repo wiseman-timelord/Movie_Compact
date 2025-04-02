@@ -1,18 +1,15 @@
 # interface.py
 
-import os
-import json
+import os, json, time, sys
 import gradio as gr
-import sys
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from datetime import datetime
 from dataclasses import dataclass
 from queue import Queue
 from threading import Lock, Event
-import time
-from utility import (
+from scripts.exceptions import MovieCompactError, ProcessingError
+from scripts.utility import (
     load_settings,
-    log_event,
     LogManager,
     MetricsCollector,
     FileProcessor,
@@ -31,10 +28,6 @@ from scripts.temporary import (
     update_processing_state
 )
 from process import VideoProcessor, BatchProcessor
-
-class MovieCompactError(Exception):
-    """Base exception for Movie Consolidator errors."""
-    pass
 
 class InterfaceManager:
     def __init__(self, log_manager: Optional[LogManager] = None):
@@ -331,7 +324,6 @@ class InterfaceManager:
                     self.motion_threshold,
                     self.min_scene_duration,
                     self.max_speed,
-        .When the user changes these settings in the Gradio interface, they are saved to persistent.json, and the program uses these preferences alongside the detected hardware capabilities to decide which processing methods to employself.preserve_pitch,
                     self.enhance_audio,
                     self.use_opencl,
                     self.use_avx2,
@@ -340,19 +332,19 @@ class InterfaceManager:
                 outputs=[self.status_output]
             )
 
-            self.reset_settings_btn.click(
-                fn=self._reset_settings,
-                outputs=[
-                    self.motion_threshold,
-                    self.min_scene_duration,
-                    self.max_speed,
-                    self.preserve_pitch,
-                    self.enhance_audio,
-                    self.use_opencl,
-                    self.use_avx2,
-                    self.use_aocl
-                ]
-            )
+        self.reset_settings_btn.click(
+            fn=self._reset_settings,
+            outputs=[
+                self.motion_threshold,
+                self.min_scene_duration,
+                self.max_speed,
+                self.preserve_pitch,
+                self.enhance_audio,
+                self.use_opencl,
+                self.use_avx2,
+                self.use_aocl
+            ]
+        )
 
         # Log handlers
         self.refresh_log_btn.click(
@@ -689,7 +681,8 @@ def launch_gradio_interface(log_manager: Optional[LogManager] = None) -> None:
         manager = InterfaceManager(log_manager)
         manager.launch()
     except Exception as e:
-        log_event(f"Failed to launch interface: {e}", "ERROR", "INTERFACE")
+        print(f"Error: Failed to launch interface - {e}")  # Replaced log_event
+        time.sleep(5)
         print(f"Error: Failed to launch interface - {e}")
         sys.exit(1)
 
@@ -707,5 +700,6 @@ if __name__ == "__main__":
         sys.exit(0)
         
     except Exception as e:
-        print(f"\nUnexpected error: {e}")
+        print(f"\nError: Unexpected error - {e}")  # Replaced log_event
+        time.sleep(5)
         sys.exit(1)
