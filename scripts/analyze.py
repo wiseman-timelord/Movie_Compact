@@ -7,9 +7,10 @@ from typing import List, Dict, Any, Tuple, Optional, Generator, Union
 from dataclasses import dataclass
 from scripts.exceptions import AnalysisError, MovieCompactError
 from scripts.utility import (
+    load_hardware_config,  # Add this
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
-    monitor_memory_usage, MemoryManager, ProgressMonitor, ErrorHandler,
+    MemoryManager, ProgressMonitor, ErrorHandler,
     CoreUtilities, AudioProcessor
 )
 from scripts.temporary import (
@@ -26,7 +27,6 @@ import time
 from collections import deque
 from scipy import signal
 import librosa
-import GLOBAL_STATE
 
 # Classes...
 class ContentAnalyzer:

@@ -10,7 +10,7 @@ from threading import Lock, Event
 from scripts.exceptions import MovieCompactError, ProcessingError
 from scripts.utility import (
     load_settings,
-    LogManager,
+    load_hardware_config,  # Add this
     MetricsCollector,
     FileProcessor,
     MemoryManager,
@@ -27,10 +27,10 @@ from scripts.temporary import (
     get_full_path,
     update_processing_state
 )
-from process import VideoProcessor, BatchProcessor
+from .process import VideoProcessor, BatchProcessor
 
 class InterfaceManager:
-    def __init__(self, log_manager: Optional[LogManager] = None):
+    def __init__(self):
         self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.progress_config = PROGRESS_CONFIG
@@ -675,7 +675,7 @@ class InterfaceManager:
             outputs=[self.queue_display]
         )
 
-def launch_gradio_interface(log_manager: Optional[LogManager] = None) -> None:
+def launch_gradio_interface():
     """Launch the Gradio interface with specified log manager."""
     try:
         manager = InterfaceManager(log_manager)

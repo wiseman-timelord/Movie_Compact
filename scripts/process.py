@@ -22,21 +22,20 @@ from scripts.temporary import (
     update_processing_state,
     BASE_DIR
 )
-from utility import (
+from scripts.utility import (
     load_settings,
+    load_hardware_config,
     cleanup_work_directory,
     ProgressMonitor,
     MetricsCollector,
     PreviewGenerator,
     SceneManager,
     AudioAnalyzer,
-    AudioProcessor,
     MemoryManager,
     ErrorHandler,
     CoreUtilities,
     detect_static_frame,
-    detect_menu_screen,
-    monitor_memory_usage
+    detect_menu_screen
 )
 
 # Classes...

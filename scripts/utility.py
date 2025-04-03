@@ -1,7 +1,7 @@
 # .\scripts\utility.py
 
 # Imports...
-import os, cv2, ime
+import os, cv2, time
 import numpy as np
 import pyopencl as cl
 import json, datetime, sys, psutil, librosa, shutil, gc
@@ -13,7 +13,8 @@ from scripts.temporary import (
     MEMORY_CONFIG,
     ERROR_CONFIG,
     AUDIO_CONFIG,
-    PROCESSING_CONFIG
+    PROCESSING_CONFIG,
+    HARDWARE_CONFIG
 )
 
 # OpenCL setup (global for reuse)
@@ -54,7 +55,6 @@ class MemoryManager:
         self.cleanup_interval = MEMORY_CONFIG['cleanup_interval']
 
     def check_memory(self) -> Dict[str, Union[bool, float]]:
-        """Check current memory usage and status."""
         try:
             process = psutil.Process()
             memory_percent = process.memory_percent()
@@ -69,14 +69,11 @@ class MemoryManager:
             }
             
             if status['warning']:
-                print(f"Warning: High memory usage: {memory_percent:.1f}%")  # Replaced log_event
+                print(f"Warning: High memory usage: {memory_percent:.1f}%")
                 time.sleep(3)
-            
-            return status
         except Exception as e:
-            print(f"Error: Checking memory failed - {e}")  # Replaced log_event
+            print(f"Error: Checking memory failed - {e}")
             time.sleep(5)
-            return {'safe': False, 'warning': True, 'critical': False, 'usage_percent': 0, 'available_gb': 0}
 
     def cleanup(self, force: bool = False) -> bool:
         """Perform memory cleanup if needed or forced."""
@@ -92,14 +89,11 @@ class MemoryManager:
                 # Reset last cleanup time
                 self._last_cleanup = current_time
                 
-                print("Info: Memory cleanup performed")  # Replaced log_event
+                print("Info: Memory cleanup performed")
                 time.sleep(1)
-                return True
             except Exception as e:
-                print(f"Error: Memory cleanup error - {e}")  # Replaced log_event
+                print(f"Error: Memory cleanup error - {e}")
                 time.sleep(5)
-                return False
-        return False
 
     def optimize_for_large_file(self, file_size: int) -> Dict[str, Any]:
         """Configure memory management for large files."""
@@ -252,7 +246,8 @@ class ProgressMonitor:
             try:
                 callback(stage, progress, message)
             except Exception as e:
-                log_event(f"Error in progress callback: {e}", "ERROR", "PROGRESS")
+                print(f"Error: [PROGRESS] In callback: {e}")
+                time.sleep(5)
 
     def get_estimated_time(self) -> str:
         """Get estimated time remaining based on progress."""
@@ -286,7 +281,6 @@ class ErrorHandler:
         self.retry_delay = ERROR_CONFIG['retry_delay']
 
     def handle_error(self, error: Exception, context: str) -> Dict[str, Any]:
-        """Handle an error and determine recovery action."""
         with self._lock:
             error_info = {
                 'timestamp': datetime.datetime.now(),
@@ -298,7 +292,8 @@ class ErrorHandler:
             }
             
             self.error_log.append(error_info)
-            log_event(f"Error in {context}: {str(error)}", "ERROR", error_info['type'])
+            print(f"Error: [{error_info['type']}] In {context}: {str(error)}")  # Changed
+            time.sleep(5)  # Added
             
             return error_info
 
@@ -332,8 +327,8 @@ class ErrorHandler:
                     raise
                     
                 delay = self.retry_delay * (2 ** (retries - 1))
-                log_event(f"Retry {retries}/{max_attempts} after {delay}s", "INFO", "RETRY")
-                time.sleep(delay)
+                print(f"Info: Retry {retries}/{max_attempts} after {delay}s")  # Changed
+                time.sleep(1)  # Added
 
 class AudioProcessor:
     def __init__(self, sample_rate: int = 44100):
@@ -410,73 +405,6 @@ class AudioProcessor:
             print(f"Error processing audio: {e}")
             return audio
 
-class AudioAnalyzer:
-    def __init__(self):
-        self.threshold = AUDIO_CONFIG['threshold']
-        self.sample_rate = AUDIO_CONFIG['sample_rate']
-        self.window_size = AUDIO_CONFIG['window_size']
-        self.hop_length = AUDIO_CONFIG['hop_length']
-        self.processor = AudioProcessor()
-
-    def extract_audio(self, video_path: str) -> np.ndarray:
-        """Extract audio from video file."""
-        try:
-            import moviepy.editor as mp
-            video = mp.VideoFileClip(video_path)
-            if video.audio is None:
-                log_event("No audio track found in video", "WARNING", "AUDIO")
-                return np.array([])
-
-            audio = video.audio.to_soundarray()
-            video.close()
-
-            if len(audio.shape) > 1:
-                audio = np.mean(audio, axis=1)
-
-            return audio
-        except Exception as e:
-            log_event(f"Error extracting audio: {e}", "ERROR", "AUDIO")
-            return np.array([])
-
-    def detect_high_activity(self, audio: np.ndarray,
-                           window_size: Optional[int] = None) -> List[Tuple[float, float]]:
-        """Detect segments with high audio activity."""
-        try:
-            if audio.size == 0:
-                return []
-
-            if window_size is None:
-                window_size = self.window_size
-
-            energy = librosa.feature.rms(
-                y=audio,
-                frame_length=window_size,
-                hop_length=self.hop_length
-            )[0]
-
-            energy = energy / np.max(energy)
-            active_segments = []
-            start = None
-
-            for i, e in enumerate(energy):
-                if e > self.threshold and start is None:
-                    start = i * self.hop_length / self.sample_rate
-                elif e <= self.threshold and start is not None:
-                    end = i * self.hop_length / self.sample_rate
-                    if end - start >= 0.1:
-                        active_segments.append((start, end))
-                    start = None
-
-            if start is not None:
-                end = len(audio) / self.sample_rate
-                if end - start >= 0.1:
-                    active_segments.append((start, end))
-
-            return active_segments
-        except Exception as e:
-            log_event(f"Error detecting audio activity: {e}", "ERROR", "AUDIO")
-            return []
-
 class SceneManager:
     def __init__(self):
         self.scene_settings = SCENE_CONFIG
@@ -529,8 +457,8 @@ class SceneManager:
             
             return diff > self.threshold or diff_score > 30.0
         except Exception as e:
-            log_event(f"Error in scene change detection: {e}", "ERROR", "SCENE")
-            return False
+            print(f"Error: Scene change detection failed - {e}")
+            time.sleep(5)
 
     def initialize_scene(self, start_frame: int) -> Dict[str, Any]:
         """Initialize a new scene."""
@@ -598,8 +526,9 @@ class SceneManager:
                 return (current_complexity * (frame_count - 1) + complexity) / frame_count
                 
         except Exception as e:
-            log_event(f"Error calculating scene complexity: {e}", "ERROR", "SCENE")
-            return current_complexity
+            print(f"Error: Scene complexity calculation failed - {e}")
+            time.sleep(5)
+
 
     def finalize_scene(self, scene: Dict[str, Any], frames: List[np.ndarray],
                       end_frame: int) -> Dict[str, Any]:
@@ -648,9 +577,11 @@ class SceneManager:
                     elif mean_diff_prev < mean_diff_next:
                         transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
                 except Exception as e:
-                    # Replace with your logging mechanism
-                    print(f"Error detecting transitions at frame {i}: {e}", "WARNING", "SCENE")
-            return transitions
+                    print(f"Warning: Frame shape mismatch at index {i}")
+                    time.sleep(3)
+                except Exception as e:
+                    print(f"Warning: Transition detection error - {e}")
+                    time.sleep(3)
 
     def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge scenes that are too short."""
@@ -786,8 +717,8 @@ class PreviewGenerator:
             return thumbnails
             
         except Exception as e:
-            log_event(f"Error generating thumbnails: {e}", "ERROR", "PREVIEW")
-            return []
+            print(f"Error: Thumbnail generation failed - {e}")
+            time.sleep(5)
 
 class MetricsCollector:
     """Collect and track processing metrics."""
@@ -842,74 +773,77 @@ class MetricsCollector:
         return summary
         
 
-class PreviewGenerator:
-    def __init__(self, work_dir: str = 'work'):
-        self.work_dir = work_dir
-        os.makedirs(work_dir, exist_ok=True)
+class FileProcessor:
+    """Handle file validation and processing operations."""
+    
+    def __init__(self, supported_formats: List[str]):
+        self.supported_formats = supported_formats
+        self.core = CoreUtilities()
+        self.error_handler = ErrorHandler()
 
-    def create_preview(self, input_path: str) -> str:
-        """
-        Create a 360p preview of the video using ffmpeg.
-        
+    def validate_file(self, file_path: str) -> bool:
+        """Validate a file's existence and format."""
+        if not os.path.exists(file_path):
+            self.error_handler.handle_error(
+                FileNotFoundError(f"File not found: {file_path}"), 
+                "file_validation"
+            )
+            return False
+            
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in self.supported_formats:
+            self.error_handler.handle_error(
+                ValueError(f"Unsupported format: {ext}"), 
+                "file_validation"
+            )
+            return False
+            
+        return True
+
+    def get_file_metadata(self, file_path: str) -> Dict[str, Any]:
+        """Get basic file metadata."""
+        return {
+            "path": file_path,
+            "size": os.path.getsize(file_path),
+            "modified": os.path.getmtime(file_path),
+            "format": os.path.splitext(file_path)[1].lower()
+        }
+
+    def batch_validate(self, file_list: List[str]) -> Dict[str, List[str]]:
+        """Validate multiple files with progress tracking."""
+        results = {"valid": [], "invalid": []}
+        for idx, file_path in enumerate(file_list):
+            if self.validate_file(file_path):
+                results["valid"].append(file_path)
+            else:
+                results["invalid"].append(file_path)
+                
+            self.core.progress_monitor.update_progress(
+                (idx + 1) / len(file_list) * 100,
+                f"Validating files: {idx+1}/{len(file_list)}"
+            )
+            
+        return results
+
+class AudioAnalyzer:
+    def extract_audio(self, video_path: str) -> np.ndarray:
+        """Extract audio from a video file.
+
         Args:
-            input_path: Path to input video.
-        
+            video_path (str): Path to the video file.
+
         Returns:
-            str: Path to preview video.
+            np.ndarray: Audio data as a NumPy array.
         """
-        preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
-        os.system(f'ffmpeg -i "{input_path}" -vf "scale=-1:360" -c:v libx264 -crf 23 '
-                  f'-c:a aac -y "{preview_path}"')
-        return preview_path
-
-class AudioProcessor:
-    def __init__(self, sample_rate: int = 44100):
-        self.sample_rate = sample_rate
-
-    def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Reduce noise using spectral subtraction.
-        
-        Args:
-            audio: Input audio array (mono, float32).
-        
-        Returns:
-            np.ndarray: Noise-reduced audio.
-        """
-        # Estimate noise from first 0.5 seconds
-        noise_sample = audio[:int(0.5 * self.sample_rate)]
-        noise_stft = librosa.stft(noise_sample, n_fft=2048, hop_length=512)
-        noise_mag = np.mean(np.abs(noise_stft), axis=1, keepdims=True)
-        
-        # STFT of full audio
-        audio_stft = librosa.stft(audio, n_fft=2048, hop_length=512)
-        audio_mag, audio_phase = np.abs(audio_stft), np.angle(audio_stft)
-        
-        # Spectral subtraction
-        clean_mag = np.maximum(audio_mag - noise_mag, 0.0)
-        clean_stft = clean_mag * np.exp(1j * audio_phase)
-        
-        return librosa.istft(clean_stft, hop_length=512)
-
-    def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Enhance clarity using a bandpass filter for voice frequencies.
-        
-        Args:
-            audio: Input audio array (mono, float32).
-        
-        Returns:
-            np.ndarray: Clarity-enhanced audio.
-        """
-        # Bandpass filter for 1kHz–4kHz (voice range)
-        lowcut, highcut = 1000.0, 4000.0
-        nyquist = 0.5 * self.sample_rate
-        low, high = lowcut / nyquist, highcut / nyquist
-        b, a = butter(4, [low, high], btype='band')
-        enhanced_audio = lfilter(b, a, audio)
-        return enhanced_audio
-
-
+        try:
+            import moviepy.editor as mp
+            clip = mp.VideoFileClip(video_path)
+            audio = clip.audio.to_soundarray()
+            clip.close()
+            return audio
+        except Exception as e:
+            print(f"Error extracting audio: {e}")
+            return np.array([])
 
 # Functions...
 def cleanup_work_directory() -> None:
@@ -925,10 +859,12 @@ def load_settings() -> Dict[str, Any]:
         with open(settings_path, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        log_event("Settings file not found, using defaults", "WARNING", "SETTINGS")
+        print("Warning: Settings file not found, using defaults")
+        time.sleep(3)
         return {}
     except json.JSONDecodeError as e:
-        log_event(f"Error decoding settings: {e}", "ERROR", "SETTINGS")
+        print(f"Error: Settings decode failed - {e}")
+        time.sleep(5)
         return {}
 
 def load_hardware_config():
@@ -938,12 +874,67 @@ def load_hardware_config():
         with open(hardware_file, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        log_event("Hardware configuration file not found, assuming default capabilities", "WARNING", "CONFIG")
-        return {"x64": True, "AVX2": False, "AOCL": False, "OpenCL": False}
+        print("Warning: Hardware config missing, using defaults")
+        time.sleep(3)
+        return HARDWARE_CONFIG  # Use HARDWARE_CONFIG instead of default_config
     except json.JSONDecodeError as e:
-        log_event(f"Error decoding hardware.json: {e}", "ERROR", "CONFIG")
-        return {"x64": True, "AVX2": False, "AOCL": False, "OpenCL": False}
+        print(f"Error: Hardware config decode failed - {e}")
+        time.sleep(5)
+        return HARDWARE_CONFIG
 
+def detect_static_frame(frame1: np.ndarray, frame2: np.ndarray) -> bool:
+    """Detect if two consecutive frames are static using histogram comparison."""
+    # Convert to HSV color space
+    hsv1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2HSV)
+    hsv2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV)
+    
+    # Calculate histograms for hue and saturation channels
+    hist1 = cv2.calcHist([hsv1], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    hist2 = cv2.calcHist([hsv2], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    
+    # Normalize histograms
+    cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    
+    # Compare histograms using correlation
+    similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    
+    # Get threshold from config
+    static_threshold = PROCESSING_CONFIG.get('static_threshold', 0.98)
+    return similarity >= static_threshold
+
+def detect_menu_screen(frame: np.ndarray) -> bool:
+    """Detect menu screens using text and UI element analysis."""
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Detect edges and text regions
+    edges = cv2.Canny(gray, 100, 200)
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                  cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # Analyze text-like contours
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    text_contours = len([c for c in contours if 0.1 < (cv2.boundingRect(c)[2]/cv2.boundingRect(c)[3]) < 15])
+    
+    # Calculate metrics
+    edge_density = np.count_nonzero(edges) / edges.size
+    menu_threshold = PROCESSING_CONFIG.get('menu_threshold', 0.85)
+    
+    return (text_contours > 10) and (edge_density < menu_threshold)
+
+def detect_texture_change(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """Detect significant texture changes between frames using Laplacian variance."""
+    # Convert to grayscale
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    
+    # Calculate texture variance
+    texture1 = cv2.Laplacian(gray1, cv2.CV_64F).var()
+    texture2 = cv2.Laplacian(gray2, cv2.CV_64F).var()
+    
+    # Return True if texture difference exceeds threshold
+    return abs(texture1 - texture2) > threshold
 
 def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
     """
