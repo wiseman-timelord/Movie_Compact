@@ -32,10 +32,10 @@ class MovieCompact:
         self.hardware_config = HARDWARE_CONFIG
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
+        self.settings = load_settings()  # Load settings here
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
         
-        # Define required directories and files
         self.required_dirs = ["data", "input", "output", "work"]
         self.required_files = [
             os.path.join("data", "persistent.json"),
@@ -44,12 +44,11 @@ class MovieCompact:
             os.path.join("scripts", "__init__.py")
         ]
         
-        # Initialize environment
         self.validate_environment()
         
-        # Initialize components (removed log_manager)
-        self.processor = VideoProcessor()
-        self.analyzer = VideoAnalyzer()
+        # Pass settings to components
+        self.processor = VideoProcessor(settings=self.settings)
+        self.analyzer = VideoAnalyzer(settings=self.settings)
         self.audio_analyzer = AudioAnalyzer()
         self.scene_manager = SceneManager()
         self.preview_generator = PreviewGenerator()
@@ -133,6 +132,8 @@ def main():
     """Main entry point for the application."""
     try:
         # Clear screen
+        consolidator = MovieCompact()
+        
         os.system('cls' if os.name == 'nt' else 'clear')
         
         print("Movie Consolidator")
@@ -140,6 +141,7 @@ def main():
         time.sleep(1)  # Normal message: 1s
         
         # Initialize
+        settings = load_settings()  # Hypothetical call
         consolidator = MovieCompact()
         consolidator.print_hardware_info()
         
