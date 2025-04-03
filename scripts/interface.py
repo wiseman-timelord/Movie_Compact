@@ -37,7 +37,7 @@ class InterfaceManager:
         self.error_config = ERROR_CONFIG
         self.hardware_capabilities = load_hardware_config()  # Load hardware capabilities
         
-        self.processor = VideoProcessor(log_manager)
+        self.processor = VideoProcessor()  # No log_manager
         self.batch_processor = BatchProcessor()
         self.file_processor = FileProcessor(self.config['supported_formats'])
         self.memory_manager = MemoryManager()
@@ -545,7 +545,8 @@ class InterfaceManager:
             return [f for f in os.listdir("input")
                    if f.lower().endswith(('.mp4', '.avi', '.mkv'))]
         except Exception as e:
-            self.log_manager.log(f"Error listing input files: {e}", "ERROR", "FILES")
+            print(f"Error: Listing input files failed - {e}")
+            time.sleep(5)
             return []
 
     def _update_button_states(self) -> Dict[gr.Button, Dict[str, bool]]:
@@ -577,7 +578,8 @@ class InterfaceManager:
             self.metrics_display.update(self.metrics.get_metrics_report())
             
         except Exception as e:
-            self.log_manager.log(f"Error updating progress: {e}", "ERROR", "PROGRESS")
+            print(f"Error: Updating progress failed - {e}")
+            time.sleep(5)
 
     def _validate_target_duration(self, target_duration: float) -> Tuple[bool, str]:
         """Validate target duration against video length."""
@@ -676,21 +678,17 @@ class InterfaceManager:
         )
 
 def launch_gradio_interface():
-    """Launch the Gradio interface with specified log manager."""
     try:
-        manager = InterfaceManager(log_manager)
+        manager = InterfaceManager()  # No log_manager
         manager.launch()
     except Exception as e:
-        print(f"Error: Failed to launch interface - {e}")  # Replaced log_event
+        print(f"Error: Failed to launch interface - {e}")
         time.sleep(5)
         print(f"Error: Failed to launch interface - {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
-    try:
-        # Initialize logging
-        log_manager = LogManager(os.path.join("data", "events.txt"))
-        
+    try:        
         # Launch interface
         print("\nLaunching Movie Consolidator interface...")
         launch_gradio_interface(log_manager)

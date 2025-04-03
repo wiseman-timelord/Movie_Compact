@@ -40,14 +40,14 @@ from scripts.utility import (
 
 # Classes...
 class VideoProcessor:
-    def __init__(self, log_manager=None):
+    def __init__(self, settings=None, log_manager=None):
         self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
         self.speed_config = SPEED_CONFIG
         self.memory_config = MEMORY_CONFIG
         self.hardware_capabilities = load_hardware_config()
-        self.settings = load_settings()
+        self.settings = settings or load_settings()
         
         self.analyzer = VideoAnalyzer(log_manager)
         self.audio_processor = AudioProcessor()
@@ -55,7 +55,6 @@ class VideoProcessor:
         self.progress = ProgressMonitor()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
-        self.log_manager = log_manager
         self.cancel_flag = Event()
         self._lock = Lock()
 
@@ -447,9 +446,8 @@ class BatchProcessor:
                 try:
                     success = future.result()
                     if not success:
-                        self.log_manager.log(
-                            f"Failed to process {input_path}", "ERROR", "BATCH"
-                        )
+                        print(f"Error: Processing {input_path} failed")
+                        time.sleep(5)
                 except Exception as e:
                     self.error_handler.handle_error(e, "batch_monitoring")
 

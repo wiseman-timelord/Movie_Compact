@@ -10,11 +10,7 @@ from threading import Lock, Event
 from queue import Queue
 from scripts.exceptions import (HardwareError, ConfigurationError, MovieCompactError)
 from scripts.temporary import (
-    MEMORY_CONFIG,
-    ERROR_CONFIG,
-    AUDIO_CONFIG,
-    PROCESSING_CONFIG,
-    HARDWARE_CONFIG
+    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, HARDWARE_CONFIG, BASE_DIR
 )
 
 # OpenCL setup (global for reuse)
@@ -107,13 +103,8 @@ class MemoryManager:
             'use_temp_files': file_size > available_mem // 2
         }
         
-        self.log_manager.log(
-            f"Memory config: chunk_size={chunk_size/1024/1024:.1f}MB, "
-            f"max_chunks={config['max_chunks']}, "
-            f"use_temp={config['use_temp_files']}",
-            "INFO",
-            "MEMORY"
-        )
+        print(f"Info: Memory config: chunk_size={chunk_size/1024/1024:.1f}MB, max_chunks={config['max_chunks']}, use_temp={config['use_temp_files']}")
+        time.sleep(1)
         
         return config
 
@@ -137,11 +128,8 @@ class MemoryManager:
                 # Request garbage collection
                 gc.collect()
                 
-                self.log_manager.log(
-                    "Memory recovery performed",
-                    "INFO",
-                    "MEMORY"
-                )
+                print("Info: Memory recovery performed")
+                time.sleep(1)
                 return True
                 
             except Exception as e:
@@ -160,11 +148,8 @@ class MemoryManager:
                 try:
                     usage = self.check_memory()
                     if usage['warning'] or usage['critical']:
-                        self.log_manager.log(
-                            f"High memory usage: {usage['usage_percent']:.1f}%",
-                            "WARNING" if usage['warning'] else "ERROR",
-                            "MEMORY"
-                        )
+                        print(f"{'Warning' if usage['warning'] else 'Error'}: High memory usage: {usage['usage_percent']:.1f}%")
+                        time.sleep(3 if usage['warning'] else 5)
                         if usage['critical']:
                             self.cleanup(force=True)
                     time.sleep(interval_seconds)
