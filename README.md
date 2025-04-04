@@ -37,6 +37,7 @@ A sophisticated video processing application that creates condensed, action-focu
 
 ## Development
 - At stage of bugfixing Gradio initialization. Need to simplify the Json, for some reason its creating 2 instead of 1. check new document in Notepad++ for current prompt.
+- Move `.\work` to `.\data\temp`, inline with my other recent program designs.
 - When Initialization bugfixing is complete, then optimize scripts, use more intelligent code to achieve the same result with less overall characters.
 - Details of the outline...
 ```
