@@ -2,7 +2,7 @@
 Status: Alpha (code implemented)
 
 ## Description
-A sophisticated video processing application that creates condensed, action-focused feature movies from long-play gaming videos using advanced motion, texture, and audio analysis. Features a user-friendly Gradio interface with real-time progress tracking and comprehensive controls.
+A sophisticated video processing application that creates condensed, action-focused feature movies from long-play gaming videos, using advanced motion, texture, and audio analysis. Features a user-friendly Gradio interface with real-time progress tracking and comprehensive controls.
 
 ## Features
 - **Enhanced Gradio Interface**: Real-time progress monitoring and control system
