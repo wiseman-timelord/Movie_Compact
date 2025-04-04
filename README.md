@@ -76,11 +76,13 @@ A sophisticated video processing application that creates condensed, action-focu
 
 ## Files Created
 ```
-├── data\              # Configuration and logging
-│   ├─ persistent.json # persistent config
-├── input\             # Source video storage
-├── output\            # Processed video output
-├── work\              # Temporary processing files
+├── scripts\
+│   ├── __init__.py     # Blank init file.
+├── data\               # Configuration and logging
+│   ├── persistent.json # persistent config
+├── input\              # Source video storage
+├── output\             # Processed video output
+├── work\               # Temporary processing files
 ```
 
 ## Credits
