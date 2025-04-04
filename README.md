@@ -36,7 +36,10 @@ A sophisticated video processing application that creates condensed, action-focu
 - Link for, information about and downloading of, the AVX/2/512 enhancement [AOCL](https://www.amd.com/en/developer/aocl.html) on AMD.Com.
 
 ## Development
-The program is supposed to consolidate very large video clips into action-packed consolidated movie clips. The implementation includes:
+- At stage of bugfixing Gradio initialization. Need to simplify the Json, for some reason its creating 2 instead of 1. check new document in Notepad++ for current prompt.
+- When Initialization bugfixing is complete, then optimize scripts, use more intelligent code to achieve the same result with less overall characters.
+- Details of the outline...
+```
   1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
   1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
   2. Intelligent preview system that converts videos to 360p in the `work` folder, enabling fast frame analysis while maintaining full quality for final output. This dual-processing approach prevents memory overload.
@@ -53,6 +56,7 @@ The program is supposed to consolidate very large video clips into action-packed
       - Real-time playback for action sequences
   6. ) Final video compilation with flexible duration targeting (±30 minutes acceptable variance for long videos).
   7. ) Clean output ready for example, clips to be loaded in movie maker for then the addition of titles/credits/intro/outro.
+```
 
 ## Package Structure
 ```
