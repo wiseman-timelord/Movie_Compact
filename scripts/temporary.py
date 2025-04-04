@@ -28,6 +28,7 @@ PROCESSING_CONFIG = {
     'texture_threshold': 0.4,
     'min_scene_duration': 2.0,
     'max_scene_duration': 300.0,
+    'max_speed_factor': 4.0,
     'scene_similarity_threshold': 0.85,
     
     # Frame Processing
@@ -84,11 +85,22 @@ MEMORY_CONFIG = {
 
 # Hardware Configuration
 HARDWARE_CONFIG = {
+    # Hardware capabilities (detected)
+    'OpenCL': False,
+    'AVX2': False,
+    'AOCL': False,
+    'x64': False,
+    
+    # User preferences (configurable)
     'use_gpu': True,
     'use_opencl': True,
     'use_avx2': True,
+    
+    # Performance settings
     'gpu_batch_size': 32,
     'cpu_threads': 4,
+    
+    # Platform preferences
     'opencl_platform_preference': ['NVIDIA', 'AMD', 'Intel']
 }
 

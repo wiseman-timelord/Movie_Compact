@@ -1,7 +1,8 @@
 # launcher.py
 
 # Imports...
-import os, sys, json, time
+print("Initializing Imports..")
+import os, sys, json, time, traceback
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from scripts.utility import (
@@ -18,6 +19,8 @@ from scripts.utility import (
 from scripts.process import VideoProcessor
 from scripts.interface import launch_gradio_interface
 from scripts.analyze import VideoAnalyzer
+from scripts.temporary import SCENE_CONFIG
+print("..Imports Initialized.")
 
 # Classes...
 class MovieCompact:
@@ -32,7 +35,7 @@ class MovieCompact:
         self.hardware_config = HARDWARE_CONFIG
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
-        self.settings = load_settings()  # Load settings here
+        self.settings = load_settings()
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
         
@@ -50,7 +53,7 @@ class MovieCompact:
         self.processor = VideoProcessor(settings=self.settings)
         self.analyzer = VideoAnalyzer(settings=self.settings)
         self.audio_analyzer = AudioAnalyzer()
-        self.scene_manager = SceneManager()
+        self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)  # Updated line
         self.preview_generator = PreviewGenerator()
 
     def validate_environment(self) -> None:
@@ -74,11 +77,13 @@ class MovieCompact:
 
     def print_hardware_info(self) -> None:
         print("\nHardware Configuration:")
-        time.sleep(1)  # Normal message: 1s
-        for key, value in self.hardware_config.items():  # Fixed from self.config
-            print(f"{key}: {value}")
-            time.sleep(1)  # Normal message: 1s
-        # Removed print(status) as status is undefined
+        time.sleep(1)
+        # Display actual detected capabilities
+        print(f"GPU Acceleration: {'Enabled' if self.hardware_config['use_gpu'] else 'Disabled'}")
+        print(f"OpenCL Available: {self.hardware_config.get('opencl_available', False)}")
+        print(f"AVX2 Available: {self.hardware_config.get('avx2_available', False)}")
+        print(f"CPU Threads: {self.hardware_config['cpu_threads']}")
+        time.sleep(1)
 
     def validate_input_file(self, input_path: str) -> bool:
         if not os.path.exists(input_path):
@@ -91,24 +96,35 @@ class MovieCompact:
         
         if ext not in supported_formats:
             print(f"Error: Unsupported format. Supported: {', '.join(supported_formats)}")
-            time.sleep(5)  # Error: 5s (replaced log_manager.log)
+            time.sleep(5)  # Error: 5s 
             return False
             
         return True
 
     def process_file(self, input_path: str, output_path: str, target_duration: float) -> None:
+        """Process a single video file."""
         try:
-            # Placeholder for result; assuming processing logic will be added
-            result = True  # Replace with actual logic later
+            if not self.validate_input_file(input_path):
+                return
+            
+            print(f"Info: Starting processing of {input_path}")
+            time.sleep(1)
+            result = self.processor.process_video(
+                input_path,
+                output_path,
+                target_duration,
+                progress_callback=self._update_progress
+            )
+            
             if result:
-                print("Info: Processing completed successfully")
-                time.sleep(1)  # Normal message: 1s
+                print(f"Info: Processing completed successfully. Output: {output_path}")
+                time.sleep(1)
             else:
                 print("Error: Processing failed")
-                time.sleep(5)  # Error: 5s
+                time.sleep(5)
         except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(5)  # Error: 5s
+            print(f"Error: Processing failed - {e}")
+            time.sleep(5)
 
     def _update_progress(self, stage: str, progress: float, message: str) -> None:
         """Update processing progress."""
@@ -129,29 +145,27 @@ def print_usage():
     time.sleep(3)  # Important message: 3s
 
 def main():
-    """Main entry point for the application."""
     try:
-        # Clear screen
-        consolidator = MovieCompact()
-        
+        # Remove duplicate initialization
         os.system('cls' if os.name == 'nt' else 'clear')
+        print("========================================================================")
+        print("    Movie Consolidator")
+        print("========================================================================")
+        time.sleep(1)
         
-        print("Movie Consolidator")
-        print("=================")
-        time.sleep(1)  # Normal message: 1s
-        
-        # Initialize
-        settings = load_settings()  # Hypothetical call
+        # Single initialization call
+        print("Initializing Program..") 
         consolidator = MovieCompact()
-        consolidator.print_hardware_info()
+        print("..Initialization Complete.")
         
+        print("Program Starting..")
         # Process command line arguments
         if len(sys.argv) > 1:
             # GUI mode
             if sys.argv[1] == "--gui":
                 print("\nLaunching GUI interface...")
                 time.sleep(1)  # Normal message: 1s
-                launch_gradio_interface()  # Removed log_manager
+                launch_gradio_interface()  
             # CLI mode
             elif len(sys.argv) == 4:
                 input_path = sys.argv[1]
@@ -173,13 +187,15 @@ def main():
             # Default to GUI mode
             print("\nLaunching GUI interface...")
             time.sleep(1)  # Normal message: 1s
-            launch_gradio_interface()  # Removed log_manager
+            launch_gradio_interface()  
             
     except KeyboardInterrupt:
         print("\nInfo: Operation cancelled by user")
         time.sleep(1)  # Normal message: 1s
+        
     except Exception as e:
         print(f"Error: Program execution failed - {e}")
+        traceback.print_exc()  # Added for full stack trace
         time.sleep(5)  # Error: 5s
         
     finally:
@@ -188,4 +204,5 @@ def main():
         time.sleep(1)  # Normal message: 1s
 
 if __name__ == "__main__":
+    print("Entering `main()`...")
     main()

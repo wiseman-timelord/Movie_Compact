@@ -7,7 +7,8 @@ from typing import List, Dict, Any, Tuple, Optional, Generator, Union
 from dataclasses import dataclass
 from scripts.exceptions import AnalysisError, MovieCompactError
 from scripts.utility import (
-    load_hardware_config,  # Add this
+    load_hardware_config,
+    load_settings,  # Add this
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
     MemoryManager, ProgressMonitor, ErrorHandler,
@@ -126,7 +127,7 @@ class ContentAnalyzer:
         return 'gameplay'
 
 class VideoAnalyzer:
-    def __init__(self, settings=None, log_manager=None):
+    def __init__(self, settings=None):
         self.core = CoreUtilities()
         self.config = ANALYSIS_CONFIG
         self.scene_config = SCENE_CONFIG
@@ -136,7 +137,7 @@ class VideoAnalyzer:
         self.settings = settings or load_settings()  # Fallback
         
         self.content_analyzer = ContentAnalyzer()
-        self.scene_manager = SceneManager()
+        self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)
         self.audio_analyzer = AudioAnalyzer()
         self.preview_generator = PreviewGenerator()
         self.memory_manager = MemoryManager()
@@ -167,34 +168,41 @@ class VideoAnalyzer:
             time.sleep(1)
     
     def analyze_video(self, video_path: str, target_duration: float) -> Dict[str, Any]:
-        """Analyze video content and structure."""
         try:
-            # ... (existing code)
-            
             preview_path = self._setup_analysis(video_path)
             if not preview_path:
-                print("Error: Failed to create preview")  # Replaced log_event
-                time.sleep(5)
+                print("Error: Failed to create preview")
+                time.sleep(5)  # Error message
                 raise AnalysisError("Failed to create preview")
                 
             frames, audio_data = self._extract_content(preview_path)
             if not frames:
-                print("Error: Failed to extract frames")  # Replaced log_event
+                print("Error: Failed to extract frames")
                 time.sleep(5)
                 raise AnalysisError("Failed to extract frames")
             
-            GLOBAL_STATE.processing_state.total_frames = len(frames)
+            metadata = self._get_video_metadata(video_path)
+            GLOBAL_STATE.processing_state = ProcessingState(
+                stage="Analysis",
+                progress=0.0,
+                current_frame=0,
+                total_frames=len(frames),
+                processed_scenes=0,
+                total_scenes=0,
+                start_time=time.time(),
+                estimated_completion=0.0
+            )
             
-            # Process scenes
             scenes = self._process_scenes(frames, audio_data, target_duration)
             GLOBAL_STATE.detected_scenes = [SceneData(**scene) for scene in scenes]
             
-            # Calculate final statistics
             stats = self._calculate_statistics(scenes)
             
             self.progress.complete_stage("Analysis")
             self.memory_manager.cleanup()
             
+            print("Info: Video analysis complete")
+            time.sleep(1)  # Normal message
             return {
                 'scenes': scenes,
                 'stats': stats,
@@ -204,6 +212,8 @@ class VideoAnalyzer:
             
         except Exception as e:
             self.error_handler.handle_error(e, "video_analysis")
+            print(f"Error: Video analysis failed - {e}")
+            time.sleep(5)
             return {'scenes': [], 'stats': {}, 'frame_rate': 0, 'total_frames': 0}
 
     def _get_video_metadata(self, video_path: str) -> VideoMetadata:
@@ -238,40 +248,32 @@ class VideoAnalyzer:
                         target_duration: float) -> List[Dict[str, Any]]:
         """Process and analyze scenes."""
         self.progress.update_progress(40, "Processing scenes")
-        scenes = []
         
-        # Select motion detection method based on hardware config
-        if self.hardware_config['OpenCL']:
-            motion_detector = detect_motion_opencl
-        elif self.hardware_config['AVX2']:
-            motion_detector = detect_motion_avx2
-        else:
-            motion_detector = detect_motion_cpu
+        # Extract audio segments
+        audio_segments = []
+        if audio.size > 0:
+            energy = librosa.feature.rms(y=audio.flatten(), frame_length=2048, hop_length=512)[0]
+            for i, e in enumerate(energy):
+                if e > 0.1:  # Threshold for audio activity
+                    start = i * 512 / 44100
+                    end = (i + 1) * 512 / 44100
+                    audio_segments.append((start, end))
         
-        for i, frame_group in enumerate(self._group_frames(frames)):
-            if self.memory_manager.check_memory()['warning']:
-                self.memory_manager.cleanup()
-            
-            # Use the selected motion detector
-            # Assume frame_group has at least two frames for comparison
-            if len(frame_group) >= 2:
-                motion_detected = motion_detector(
-                    frame_group[0],  # Previous frame
-                    frame_group[-1], # Current frame
-                    self.config['motion_threshold']
-                )
-            else:
-                motion_detected = False
-            
-            scene = self._analyze_scene(frame_group, audio, target_duration, i / len(frames))
-            # Add motion detection result to scene data
-            scene['motion_detected'] = motion_detected
-            scenes.append(scene)
-            
-            progress = 40 + (i + 1) / len(frames) * 40
-            self.progress.update_progress(progress, f"Processed scene {i+1}")
+        # Use SceneManager for scene detection
+        scenes = self.scene_manager.detect_scenes(frames, audio_segments)
         
-        return self._merge_scenes(scenes)
+        total_duration_current = sum((s['end_frame'] - s['start_frame']) / 30 for s in scenes)
+        adjustment_factor = target_duration / total_duration_current if total_duration_current > 0 else 1.0
+        
+        for i, scene in enumerate(scenes):
+            scene['speed_factor'] = min(4.0, max(1.0, adjustment_factor if not scene['is_action'] else 1.0))
+            scene['start_frame'] = int(scene['start_frame'])
+            scene['end_frame'] = int(scene['end_frame'])
+            self.progress.update_progress(40 + ((i + 1) / len(scenes)) * 40, f"Processed scene {i+1}/{len(scenes)}")
+        
+        print("Info: Scene processing complete")
+        time.sleep(1)
+        return scenes
 
 class SceneAnalyzer:
     def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:

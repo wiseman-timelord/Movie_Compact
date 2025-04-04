@@ -35,12 +35,13 @@ from scripts.utility import (
     ErrorHandler,
     CoreUtilities,
     detect_static_frame,
-    detect_menu_screen
+    detect_menu_screen,
+    AudioProcessor  # Add this line
 )
 
 # Classes...
 class VideoProcessor:
-    def __init__(self, settings=None, log_manager=None):
+    def __init__(self, settings=None):
         self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
@@ -49,7 +50,7 @@ class VideoProcessor:
         self.hardware_capabilities = load_hardware_config()
         self.settings = settings or load_settings()
         
-        self.analyzer = VideoAnalyzer(log_manager)
+        self.analyzer = VideoAnalyzer()
         self.audio_processor = AudioProcessor()
         self.memory_manager = MemoryManager()
         self.progress = ProgressMonitor()
@@ -163,37 +164,38 @@ class VideoProcessor:
             return []
 
     def _process_scene_segment(self, clip: mp.VideoFileClip,
-                             scene: Dict[str, Any],
-                             frame_rate: float) -> mp.VideoFileClip:
+                              scene: SceneData) -> mp.VideoFileClip:
         """Process an individual scene segment."""
         try:
             # Handle static scenes
-            if scene.get('is_static', False):
+            if scene.scene_type == 'static':
                 return self._process_static_scene(clip)
 
             # Handle menu scenes
-            if scene.get('is_menu', False):
+            if scene.scene_type == 'menu':
                 return self._process_menu_scene(clip)
 
             # Handle action scenes
-            if scene.get('is_action', False):
+            if scene.scene_type == 'action':
                 return clip.copy()
 
             # Apply dynamic speed adjustment
             processed = self._apply_speed_adjustment(
                 clip,
-                scene['speed_factor'],
-                scene.get('transitions', [])
+                scene.speed_factor,
+                scene.transitions
             )
 
             # Process audio
             if clip.audio is not None and self.config.enhance_audio:
-                processed = self._process_audio(processed, scene['speed_factor'])
+                processed = self._process_audio(processed, scene.speed_factor)
 
             return processed
 
         except Exception as e:
             self.error_handler.handle_error(e, "segment_processing")
+            print(f"Error: Failed to process scene segment - {e}")
+            time.sleep(5)
             return clip.copy()
 
     def _process_static_scene(self, clip: mp.VideoFileClip) -> mp.VideoFileClip:
@@ -402,123 +404,116 @@ class VideoProcessor:
             return mp.concatenate_videoclips([clip1, clip2])
 
 class BatchProcessor:
-    def _process_parallel(self, files: List[Tuple[str, str, float]]) -> None:
-        """
-        Process multiple video files in parallel using a thread pool.
-
-        Args:
-            files: List of tuples (input_path, output_path, target_duration).
-        """
-        self.processing_lock = threading.Lock()
-        self.completed_files = 0
-        self.total_files = len(files)
-
-        def process_file(input_path: str, output_path: str, target_duration: float) -> bool:
-            """Process a single file and update its status."""
-            try:
-                result = self.processor.process_video(
-                    input_path,
-                    output_path,
-                    target_duration,
-                    progress_callback=lambda stage, progress, message: self._update_batch_progress(
-                        input_path, progress
-                    )
-                )
-                with self.processing_lock:
-                    self.completed_files += 1
-                    self.queue_status[input_path]['status'] = 'Complete' if result else 'Failed'
-                return result
-            except Exception as e:
-                self.error_handler.handle_error(e, "parallel_processing")
-                with self.processing_lock:
-                    self.queue_status[input_path]['status'] = 'Failed'
-                return False
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # Submit all files for processing
-            future_to_file = {
-                executor.submit(process_file, input_path, output_path, target_duration): input_path
-                for input_path, output_path, target_duration in files
-            }
-            # Monitor completion and log failures
-            for future in as_completed(future_to_file):
-                input_path = future_to_file[future]
-                try:
-                    success = future.result()
-                    if not success:
-                        print(f"Error: Processing {input_path} failed")
-                        time.sleep(5)
-                except Exception as e:
-                    self.error_handler.handle_error(e, "batch_monitoring")
-
-    # Assumed helper method (ensure it exists or adjust as needed)
+    def __init__(self):
+        self.processor = VideoProcessor()
+        self.error_handler = ErrorHandler()
+        self.queue = Queue()
+        self.queue_status = {}
+        self.progress_callback = None
+        self.active = True
+    
+    def add_to_queue(self, input_path: str, output_path: str, target_duration: float) -> None:
+        print(f"Info: Added {input_path} to queue")  # Added
+        time.sleep(1)  # Added
+    
+    def process_queue(self, progress_callback: Optional[Callable] = None) -> None:
+        """Process all files in the queue."""
+        self.progress_callback = progress_callback
+        files = []
+        while not self.queue.empty() and self.active:
+            files.append(self.queue.get())
+            self.queue.task_done()
+        if files:
+            self._process_parallel(files)
+        print("Info: Queue processing complete")
+        time.sleep(1)
+    
+    def get_queue_status(self) -> List[Dict[str, Any]]:
+        """Get current status of processing queue."""
+        status_list = []
+        for file_path, info in self.queue_status.items():
+            status_list.append({
+                'name': os.path.basename(file_path),
+                'status': info['status'],
+                'progress': info['progress']
+            })
+        return status_list
+    
     def _update_batch_progress(self, file_path: str, progress: float) -> None:
-        """Update progress for a specific file and overall batch."""
+        """Update progress for a specific file in the batch."""
         with self.processing_lock:
             self.queue_status[file_path]['progress'] = progress
+            
             total_progress = sum(info['progress'] for info in self.queue_status.values())
             overall_progress = total_progress / len(self.queue_status)
+            
             if self.progress_callback:
                 self.progress_callback(
-                    'Batch Processing', overall_progress,
+                    'Batch Processing',
+                    overall_progress,
                     f"Completed {self.completed_files}/{self.total_files} files"
                 )
+    
+    def cancel_processing(self) -> None:
+        """Cancel batch processing."""
+        self.active = False
+        self.processor.cancel_processing()
+        while not self.queue.empty():
+            self.queue.get()
+            self.queue.task_done()
+        print("Info: Batch processing cancelled")
+        time.sleep(1)
 
 def _process_parallel(self, files: List[Tuple[str, str, float]]) -> None:
-        """Process multiple files in parallel."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import threading
-        
-        self.processing_lock = threading.Lock()
-        self.completed_files = 0
-        self.total_files = len(files)
-        
-        def process_file(input_path: str, output_path: str, 
-                        target_duration: float) -> bool:
-            try:
-                result = self.processor.process_video(
-                    input_path,
-                    output_path,
-                    target_duration,
-                    progress_callback=self._update_batch_progress
-                )
-                
-                with self.processing_lock:
-                    self.completed_files += 1
-                    self.queue_status[input_path]['status'] = (
-                        'Complete' if result else 'Failed'
-                    )
-                return result
-                
-            except Exception as e:
-                self.error_handler.handle_error(e, "parallel_processing")
-                return False
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # Submit all files for processing
-            future_to_file = {
-                executor.submit(
-                    process_file,
-                    input_path,
-                    output_path,
-                    target_duration
-                ): input_path
-                for input_path, output_path, target_duration in files
-            }
+    """Process multiple files in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    
+    self.processing_lock = threading.Lock()
+    self.completed_files = 0
+    self.total_files = len(files)
+    
+    def process_file(input_path: str, output_path: str, 
+                    target_duration: float) -> bool:
+        try:
+            result = self.processor.process_video(
+                input_path,
+                output_path,
+                target_duration,
+                progress_callback=self._update_batch_progress
+            )
             
-            # Monitor completion
-            for future in as_completed(future_to_file):
-                input_path = future_to_file[future]
-                try:
-                    success = future.result()
-                    if not success:
-                        self.log_manager.log(
-                            f"Failed to process {input_path}",
-                            "ERROR",
-                            "BATCH"
-                        )
-                except Exception as e:
-                    self.error_handler.handle_error(e, "batch_monitoring")
+            with self.processing_lock:
+                self.completed_files += 1
+                self.queue_status[input_path]['status'] = (
+                    'Complete' if result else 'Failed'
+                )
+            return result
+            
+        except Exception as e:
+            self.error_handler.handle_error(e, "parallel_processing")
+            return False
+    
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_file = {
+            executor.submit(
+                process_file,
+                input_path,
+                output_path,
+                target_duration
+            ): input_path
+            for input_path, output_path, target_duration in files
+        }
+        
+        for future in as_completed(future_to_file):
+            input_path = future_to_file[future]
+            try:
+                success = future.result()
+                if not success:
+                    print(f"Error: Failed to process {input_path}")
+                    time.sleep(5)
+            except Exception as e:
+                self.error_handler.handle_error(e, "batch_monitoring")
 
         def get_queue_status(self) -> List[Dict[str, Any]]:
             """Get current status of processing queue."""

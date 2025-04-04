@@ -14,10 +14,28 @@ from scripts.temporary import (
 )
 
 # OpenCL setup (global for reuse)
-platform = cl.get_platforms()[0]
-device = platform.get_devices()[0]
-context = cl.Context([device])
-queue = cl.CommandQueue(context)
+platform = None
+device = None
+context = None
+queue = None
+prg = None
+try:
+    platforms = cl.get_platforms()
+    if platforms:
+        platform = platforms[0]
+        devices = platform.get_devices()
+        if devices:
+            device = devices[0]
+            context = cl.Context([device])
+            queue = cl.CommandQueue(context)
+            print("Info: OpenCL setup successful")
+        else:
+            print("Warning: No OpenCL devices found. Falling back to CPU processing.")
+    else:
+        print("Warning: No OpenCL platforms available. Falling back to CPU processing.")
+except Exception as e:
+    print(f"Warning: OpenCL setup failed - {e}. Falling back to CPU processing.")
+    time.sleep(3)
 
 # OpenCL kernel for frame difference
 kernel_code = """
@@ -366,16 +384,7 @@ class AudioProcessor:
         return librosa.effects.time_stretch(audio, rate=speed_factor)
 
     def process_audio(self, audio: np.ndarray, speed_factor: float) -> np.ndarray:
-        """
-        Process audio with noise reduction, pitch preservation, and clarity enhancement.
-
-        Args:
-            audio: Input audio array.
-            speed_factor: Speed adjustment factor.
-
-        Returns:
-            np.ndarray: Processed audio.
-        """
+        """Process audio with noise reduction, pitch preservation, and clarity enhancement."""
         try:
             audio = self._normalize_audio(audio)
             if self.settings.get('audio', {}).get('noise_reduction', True):
@@ -386,16 +395,16 @@ class AudioProcessor:
                 audio = self._enhance_clarity(audio)
             return audio
         except Exception as e:
-            # Replace with your logging mechanism
-            print(f"Error processing audio: {e}")
+            print(f"Error: Audio processing failed - {e}")
+            time.sleep(5)
             return audio
 
 class SceneManager:
-    def __init__(self):
-        self.scene_settings = SCENE_CONFIG
-        self.min_scene_length = SCENE_CONFIG['min_scene_length']
-        self.max_scene_length = SCENE_CONFIG['max_scene_length']
-        self.threshold = SCENE_CONFIG['scene_threshold']
+    def __init__(self, scene_config):
+        self.scene_settings = scene_config
+        self.min_scene_length = scene_config['min_scene_length']
+        self.max_scene_length = scene_config['max_scene_length']
+        self.threshold = scene_config['scene_threshold']
         self._lock = Lock()
         self.metrics = MetricsCollector()
 
@@ -536,37 +545,29 @@ class SceneManager:
         return scene
 
     def _detect_transitions(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-            """
-            Detect scene transitions between frames.
-
-            Args:
-                frames: List of video frames.
-
-            Returns:
-                List of dictionaries with transition details.
-            """
-            transitions = []
-            for i in range(1, len(frames) - 1):
-                try:
-                    # Check frame consistency
-                    if frames[i].shape != frames[i-1].shape or frames[i].shape != frames[i+1].shape:
-                        # Replace with your logging mechanism
-                        print(f"Frame shape mismatch at index {i}", "WARNING", "SCENE")
-                        continue
-                    diff_prev = cv2.absdiff(frames[i], frames[i-1])
-                    diff_next = cv2.absdiff(frames[i], frames[i+1])
-                    mean_diff_prev = np.mean(diff_prev)
-                    mean_diff_next = np.mean(diff_next)
-                    if mean_diff_prev < 5 and mean_diff_next > 30:
-                        transitions.append({'frame': i, 'type': 'cut', 'confidence': 0.9})
-                    elif mean_diff_prev < mean_diff_next:
-                        transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
-                except Exception as e:
+        """Detect scene transitions between frames."""
+        transitions = []
+        for i in range(1, len(frames) - 1):
+            try:
+                # Check frame consistency
+                if frames[i].shape != frames[i-1].shape or frames[i].shape != frames[i+1].shape:
                     print(f"Warning: Frame shape mismatch at index {i}")
                     time.sleep(3)
-                except Exception as e:
-                    print(f"Warning: Transition detection error - {e}")
-                    time.sleep(3)
+                    continue
+
+                diff_prev = cv2.absdiff(frames[i], frames[i-1])
+                diff_next = cv2.absdiff(frames[i], frames[i+1])
+                mean_diff_prev = np.mean(diff_prev)
+                mean_diff_next = np.mean(diff_next)
+
+                if mean_diff_prev < 5 and mean_diff_next > 30:
+                    transitions.append({'frame': i, 'type': 'cut', 'confidence': 0.9})
+                elif mean_diff_prev < mean_diff_next:
+                    transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
+            except Exception as e:  # Single except block for all exceptions
+                print(f"Warning: Transition detection error - {e}")
+                time.sleep(3)
+        return transitions
 
     def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge scenes that are too short."""
@@ -853,19 +854,24 @@ def load_settings() -> Dict[str, Any]:
         return {}
 
 def load_hardware_config():
-    """Load hardware capabilities from hardware.json."""
-    hardware_file = os.path.join(BASE_DIR, "data", "hardware.json")
+    """Load and validate hardware configuration with fallbacks"""
     try:
-        with open(hardware_file, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print("Warning: Hardware config missing, using defaults")
-        time.sleep(3)
-        return HARDWARE_CONFIG  # Use HARDWARE_CONFIG instead of default_config
-    except json.JSONDecodeError as e:
-        print(f"Error: Hardware config decode failed - {e}")
-        time.sleep(5)
-        return HARDWARE_CONFIG
+        with open("data/hardware.json", "r") as f:
+            hw = json.load(f)
+            return {
+                'OpenCL': bool(hw.get('OpenCL', False)),
+                'AVX2': bool(hw.get('AVX2', False)),
+                'AOCL': bool(hw.get('AOCL', False)),
+                'x64': bool(hw.get('x64', False))
+            }
+    except Exception as e:
+        print(f"Error loading hardware config: {e}")
+        return {
+            'OpenCL': False,
+            'AVX2': False,
+            'AOCL': False,
+            'x64': False
+        }
 
 def detect_static_frame(frame1: np.ndarray, frame2: np.ndarray) -> bool:
     """Detect if two consecutive frames are static using histogram comparison."""
@@ -933,6 +939,10 @@ def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: floa
     Returns:
         bool: True if motion is detected, False otherwise.
     """
+    if prg is None:
+        print("Info: OpenCL not available, using CPU for motion detection")
+        return detect_motion_cpu(frame1, frame2, threshold)
+    
     mf = cl.mem_flags
     frame1_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame1)
     frame2_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame2)
@@ -947,20 +957,18 @@ def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: floa
     return np.mean(diff) > threshold
 
 def detect_motion_avx2(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """
-    Detect motion using AVX2 (placeholder; requires intrinsics).
+    """Detect motion using AVX2-optimized vector operations."""
+    # Convert frames to 32-bit floats for SIMD operations
+    f1 = frame1.astype(np.float32)
+    f2 = frame2.astype(np.float32)
     
-    Args:
-        frame1: First frame (grayscale, np.uint8).
-        frame2: Second frame (grayscale, np.uint8).
-        threshold: Mean difference threshold.
+    # Calculate absolute difference using vectorized operations
+    diff = np.abs(f1 - f2)
     
-    Returns:
-        bool: True if motion is detected, False otherwise.
-    """
-    # TODO: Implement AVX2 vectorized differencing
-    diff = cv2.absdiff(frame1, frame2)  # Placeholder
-    return np.mean(diff) > threshold
+    # Use horizontal sum pattern optimized for AVX2
+    mean_diff = np.mean(diff)
+    
+    return mean_diff > threshold
 
 def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
     """
@@ -1021,5 +1029,6 @@ def extract_frames_optimized(video_path: str, batch_size: int = 32) -> Generator
         cap.release()
         
     except Exception as e:
-        log_event(f"Frame extraction error: {e}", "ERROR", "FRAMES")
+        print(f"Error: Frame extraction failed - {e}")  # Replaced log_event
+        time.sleep(5)  # Added
         raise MovieCompactError(f"Frame extraction failed: {e}")

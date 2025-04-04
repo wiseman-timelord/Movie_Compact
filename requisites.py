@@ -1,3 +1,6 @@
+# Script: `.\requisites.py`
+
+# Imports
 import os
 import shutil
 import subprocess
@@ -6,13 +9,39 @@ import json
 import time
 import platform
 
-# Define the base directory as the location of this script
+# Globals
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Functions...
+def clean_previous_installation():
+    """Remove existing installation artifacts from previous runs."""
+    print("Cleaning previous installation...")
+    targets = ["data"]
+    # Only clean 'venv' if not in a virtual environment
+    if sys.prefix == sys.base_prefix:
+        targets.append("venv")
+    
+    for target in targets:
+        target_path = os.path.join(BASE_DIR, target)
+        if os.path.exists(target_path):
+            try:
+                if os.path.isdir(target_path):
+                    shutil.rmtree(target_path)
+                    print(f"Removed existing {target} directory")
+                    time.sleep(1)
+                else:
+                    os.remove(target_path)
+                    print(f"Removed existing {target} file")
+                    time.sleep(1)
+            except Exception as e:
+                print(f"Error removing {target}: {str(e)}")
+                time.sleep(5)
+                raise
 
 def ensure_directories():
     """Create all required directories if they don't exist."""
     print("Creating required directories...")
-    directories = ["data", "input", "output", "work"]
+    directories = ["data", "input", "output", "work", "scripts"]
     for directory in directories:
         path = os.path.join(BASE_DIR, directory)
         if not os.path.exists(path):
@@ -37,7 +66,6 @@ def create_requirements_file():
     """Create requirements.txt with necessary packages."""
     print("Creating requirements.txt...")
     requirements = [
-        "moviepy==1.0.3",
         "numpy==1.26.0",
         "pandas==2.1.3",
         "psutil==6.1.1",
@@ -92,9 +120,15 @@ def detect_hardware():
     print("Hardware configuration saved to hardware.json")
     return hardware_info
 
-def create_persistent_json():
-    """Create persistent.json with default settings."""
-    print("Creating persistent.json with default settings...")
+def create_persistent_json(hardware_info):
+    """Create persistent.json with hardware-appropriate defaults."""
+    print("Creating persistent.json with validated defaults...")
+    
+    # Get actual hardware capabilities
+    opencl_enabled = hardware_info.get("OpenCL", False)
+    avx2_enabled = hardware_info.get("AVX2", False)
+    aocl_enabled = hardware_info.get("AOCL", False)
+
     default_settings = {
         "motion_threshold": 0.5,
         "texture_threshold": 0.6,
@@ -117,14 +151,14 @@ def create_persistent_json():
         "processor_settings": {
             "use_gpu": True,
             "cpu_cores": 4,
-            "opencl_enabled": True,
-            "avx2_enabled": True,
+            "opencl_enabled": opencl_enabled,  # Use detected value
+            "avx2_enabled": avx2_enabled,      # Use detected value
             "gpu_batch_size": 32
         },
         "hardware_preferences": {
-            "use_opencl": True,
-            "use_avx2": True,
-            "use_aocl": True
+            "use_opencl": opencl_enabled,  # Match actual capability
+            "use_avx2": avx2_enabled,      # Match actual capability
+            "use_aocl": aocl_enabled       # Match actual capability
         },
         "paths": {
             "input_path": "input",
@@ -147,7 +181,7 @@ def create_persistent_json():
     persistent_file = os.path.join(BASE_DIR, "data", "persistent.json")
     with open(persistent_file, "w") as f:
         json.dump(default_settings, f, indent=4)
-    print("Created persistent.json with default settings.")
+    print("Created hardware-validated persistent.json")
 
 def verify_installation():
     """Verify all required files and directories exist."""
@@ -179,53 +213,70 @@ def main():
     print("Starting installation process...")
     
     try:
-        # Create directories first
-        ensure_directories()
-       
-        # Create files
-        create_init_py()
-        create_requirements_file()
+        in_venv = sys.prefix != sys.base_prefix
         
-        # Check if running in virtual environment
-        if sys.prefix == sys.base_prefix:
+        if not in_venv:
+            # Initial setup (outside venv)
+            clean_previous_installation()
+            ensure_directories()
+            create_init_py()
+            create_requirements_file()
+            
+            # Setup virtual environment
             print("Not running in virtual environment. Setting up virtual environment...")
             venv_path = os.path.join(BASE_DIR, "venv")
+            
+            # Remove residual venv if exists
             if os.path.exists(venv_path):
-                print("Removing existing virtual environment...")
+                print("Removing residual virtual environment...")
                 shutil.rmtree(venv_path)
+                time.sleep(1)
+            
+            # Create new venv
             print("Creating new virtual environment...")
             subprocess.check_call([sys.executable, "-m", "venv", venv_path])
             venv_python = os.path.join(venv_path, "Scripts", "python.exe") if sys.platform == "win32" else os.path.join(venv_path, "bin", "python")
             req_file = os.path.join(BASE_DIR, "data", "requirements.txt")
+            
+            # Upgrade pip first
+            print("Upgrading pip...")
+            subprocess.check_call([venv_python, "-m", "pip", "install", "--upgrade", "pip"])
+            
+            # Install wheel and requirements
+            print("Installing wheel package...")
+            subprocess.check_call([venv_python, "-m", "pip", "install", "wheel"])
             print("Installing requirements into virtual environment...")
-            subprocess.check_call([venv_python, "-m", "pip", "install", "-r", req_file])
+            subprocess.check_call([venv_python, "-m", "pip", "install", "--use-pep517", "-r", req_file])
+            
+            # Restart script in venv
             print("Restarting script with virtual environment...")
             subprocess.check_call([venv_python, __file__])
             sys.exit(0)
-        
-        # If we reach here, we are running in the virtual environment
-        print("Running in virtual environment.")
-        
-        # Detect hardware
-        hardware_info = detect_hardware()
-        
-        # Create persistent configuration
-        create_persistent_json()
-        
-        # Verify installation
-        if not verify_installation():
-            print("Installation failed verification checks.")
-            time.sleep(5)  # Pause for 5 seconds after error
-            return False
-        
-        print("\nInstallation complete!")
-        print("To run the application, activate the virtual environment with 'venv\\Scripts\\activate' and then run 'python launcher.py'.")
-        return True
-        
+        else:
+            # Running in venv: configuration steps
+            print("Running in virtual environment.")
+            
+            # Ensure directories exist (no cleanup)
+            ensure_directories()
+            
+            # Detect hardware and create config
+            hardware_info = detect_hardware()
+            create_persistent_json(hardware_info)
+            
+            # Verify installation
+            if not verify_installation():
+                print("Installation failed verification checks.")
+                time.sleep(3)
+                return False
+            
+            print("\nInstallation complete!")
+            print("To run the application, activate the virtual environment with 'venv\\Scripts\\activate' (Windows) or 'source venv/bin/activate' (Unix), then run 'python launcher.py'.")
+            return True
+            
     except Exception as e:
         error_msg = f"Installation failed with error: {str(e)}"
         print(error_msg)
-        time.sleep(5)  # Pause for 5 seconds after error
+        time.sleep(5)
         return False
 
 if __name__ == "__main__":

@@ -25,7 +25,8 @@ from scripts.temporary import (
     ProcessingState,
     VideoMetadata,
     get_full_path,
-    update_processing_state
+    update_processing_state,
+    AUDIO_CONFIG  # Add this line
 )
 from .process import VideoProcessor, BatchProcessor
 
@@ -43,7 +44,6 @@ class InterfaceManager:
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
-        self.log_manager = log_manager or LogManager(get_full_path("data/events.txt"))
         self.processing_lock = Lock()
         self.cancel_flag = Event()
         self.current_video_info = None
@@ -143,24 +143,33 @@ class InterfaceManager:
                 with gr.Column():
                     gr.Markdown("### Available Files")
                     self.file_list = gr.CheckboxGroup(
-                        self._get_input_files(),
-                        label="Select Files to Process"
+                        label="Select Files to Process",
+                        choices=[],
+                        value=[],
+                        interactive=False
                     )
+                    self.batch_status_msg = gr.Markdown("No files found in input directory", visible=False)
+                    
+                    # Add refresh button
+                    self.refresh_files_btn = gr.Button("Refresh File List")
+                    
                     self.batch_target_duration = gr.Number(
                         label="Target Duration (minutes)",
                         value=30,
                         minimum=1
                     )
+                    
                     with gr.Row():
                         self.batch_process_btn = gr.Button(
                             "Process Selected",
-                            variant="primary"
+                            variant="primary",
+                            interactive=False
                         )
                         self.batch_cancel_btn = gr.Button(
                             "Cancel Batch",
                             variant="secondary"
                         )
-
+                
                 with gr.Column():
                     self.batch_status = gr.TextArea(
                         label="Batch Status",
@@ -168,6 +177,7 @@ class InterfaceManager:
                         lines=15
                     )
                     self.batch_progress = gr.Progress()
+                    self._create_batch_queue_display()  # Add queue display
 
     def _create_settings_tab(self) -> None:
         """Create settings configuration tab."""
@@ -179,17 +189,19 @@ class InterfaceManager:
                     self.motion_threshold = gr.Slider(
                         minimum=0.1,
                         maximum=1.0,
-                        value=self.config.motion_threshold,
+                        value=self.config['motion_threshold'],  # Changed from .motion_threshold
                         label="Motion Detection Sensitivity"
                     )
+
                     self.min_scene_duration = gr.Number(
-                        value=self.config.min_scene_duration,
+                        value=self.config['min_scene_duration'],  # Changed from .min_scene_duration
                         label="Minimum Scene Duration (seconds)"
                     )
+
                     self.max_speed = gr.Slider(
                         minimum=1.0,
                         maximum=8.0,
-                        value=self.config.max_speed_factor,
+                        value=self.config['max_speed_factor'],  # Changed from .max_speed_factor
                         label="Maximum Speed Factor"
                     )
 
@@ -197,11 +209,11 @@ class InterfaceManager:
                 with gr.Column():
                     gr.Markdown("### Audio Settings")
                     self.preserve_pitch = gr.Checkbox(
-                        value=self.config.preserve_pitch,
+                        value=AUDIO_CONFIG['preserve_pitch'],  # Fixed line
                         label="Preserve Audio Pitch"
                     )
                     self.enhance_audio = gr.Checkbox(
-                        value=self.config.enhance_audio,
+                        value=AUDIO_CONFIG['enhance_audio'],   # Fixed line
                         label="Enhance Audio Quality"
                     )
 
@@ -209,17 +221,26 @@ class InterfaceManager:
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Hardware Preferences")
+                    # Get actual detected capabilities from hardware.json
+                    hw_caps = load_hardware_config()
+                    
+                    # Use explicit boolean checks with fallbacks
                     self.use_opencl = gr.Checkbox(
-                        value=self.config.get("hardware_preferences", {}).get("use_opencl", True),
-                        label=f"Use OpenCL ({'available' if self.hardware_capabilities.get('OpenCL', False) else 'not available'})"
+                        value=bool(self.config.get("hardware_preferences", {}).get("use_opencl", False)),
+                        label=f"Use OpenCL ({'Available' if hw_caps.get('OpenCL', False) else 'Unavailable'})",
+                        interactive=hw_caps.get('OpenCL', False)
                     )
+                    
                     self.use_avx2 = gr.Checkbox(
-                        value=self.config.get("hardware_preferences", {}).get("use_avx2", True),
-                        label=f"Use AVX2 ({'available' if self.hardware_capabilities.get('AVX2', False) else 'not available'})"
+                        value=bool(self.config.get("hardware_preferences", {}).get("use_avx2", False)),
+                        label=f"Use AVX2 ({'Available' if hw_caps.get('AVX2', False) else 'Unavailable'})",
+                        interactive=hw_caps.get('AVX2', False)
                     )
+                    
                     self.use_aocl = gr.Checkbox(
-                        value=self.config.get("hardware_preferences", {}).get("use_aocl", True),
-                        label=f"Use AOCL ({'available' if self.hardware_capabilities.get('AOCL', False) else 'not available'})"
+                        value=self.config.get("hardware_preferences", {}).get("use_aocl", False),  # Fixed reference
+                        label=f"Use AOCL ({'available' if self.hardware_capabilities.get('AOCL', False) else 'not available'})",
+                        interactive=self.hardware_capabilities.get('AOCL', False)
                     )
 
             with gr.Row():
@@ -309,12 +330,15 @@ class InterfaceManager:
         self.batch_process_btn.click(
             fn=self._handle_batch_processing,
             inputs=[self.file_list, self.batch_target_duration],
-            outputs=[self.batch_status]
+            outputs=[self.batch_status],
+            preprocess=False  # Disable Gradio's input validation
         )
 
-        self.batch_cancel_btn.click(
-            fn=self._handle_batch_cancellation,
-            outputs=[self.batch_status]
+        self.batch_process_btn.click(
+            fn=self._handle_batch_processing,
+            inputs=[self.file_list, self.batch_target_duration],
+            outputs=[self.batch_status],
+            preprocess=False  # Disable Gradio's input validation
         )
 
         # Settings handlers
@@ -430,12 +454,27 @@ class InterfaceManager:
 
     def _handle_batch_processing(self, selected_files: List[str],
                                target_duration: float) -> str:
-        """Handle batch processing of multiple files."""
+        """Handle batch processing of multiple files with placeholder check."""
+        # Check for placeholder messages
+        if any(msg.startswith(("⚠️", "❌")) for msg in selected_files):
+            print("Info: Invalid file selection")
+            time.sleep(1)
+            return "Please add files to input directory first"
+        
+        # Rest of the original processing logic...
         if not selected_files:
+            print("Info: No files selected")
+            time.sleep(1)
             return "No files selected"
-            
+        
         try:
-            for file in selected_files:
+            total_files = len(selected_files)
+            for idx, file in enumerate(selected_files):
+                if self.cancel_flag.is_set():
+                    print("Info: Batch processing cancelled")
+                    time.sleep(1)
+                    return "Batch processing cancelled"
+                
                 input_path = os.path.join("input", file)
                 output_path = os.path.join(
                     "output",
@@ -446,11 +485,28 @@ class InterfaceManager:
                     output_path,
                     target_duration * 60
                 )
+                
+                # Process immediately for demonstration; in practice, use queue
+                result = self.processor.process_video(
+                    input_path,
+                    output_path,
+                    target_duration * 60,
+                    progress_callback=self._update_progress
+                )
+                if not result:
+                    print(f"Error: Failed to process {file}")
+                    time.sleep(5)
+                
+                progress = ((idx + 1) / total_files) * 100
+                self._update_progress("Batch Processing", progress, f"Processed {idx + 1}/{total_files}")
             
-            self.batch_processor.process_queue(self._update_progress)
+            print("Info: Batch processing complete")
+            time.sleep(1)
             return "Batch processing complete"
-            
+        
         except Exception as e:
+            print(f"Error: Batch processing error - {e}")
+            time.sleep(5)  # Error message
             return f"Batch processing error: {e}"
 
     def _handle_batch_cancellation(self) -> str:
@@ -459,64 +515,85 @@ class InterfaceManager:
         return "Batch processing cancelled"
 
     def _save_settings(self, motion_threshold: float, min_scene_duration: float, max_speed: float,
-                           preserve_pitch: bool, enhance_audio: bool, use_opencl: bool,
-                           use_avx2: bool, use_aocl: bool) -> str:
-            """
-            Save UI settings to persistent.json with validation.
+                      preserve_pitch: bool, enhance_audio: bool, use_opencl: bool,
+                      use_avx2: bool, use_aocl: bool) -> str:
+        """Save UI settings to persistent.json with strict type validation."""
+        # Validate numerical parameters
+        if not isinstance(motion_threshold, (int, float)) or not (0 <= motion_threshold <= 1):
+            return "Motion threshold must be a number between 0 and 1"
+        
+        if not isinstance(min_scene_duration, (int, float)) or min_scene_duration <= 0:
+            return "Minimum scene duration must be a positive number"
+        
+        if not isinstance(max_speed, (int, float)) or max_speed < 1:
+            return "Maximum speed factor must be at least 1"
 
-            Args:
-                motion_threshold: Threshold for motion detection (0–1).
-                min_scene_duration: Minimum scene length in seconds (>0).
-                max_speed: Maximum speed factor (≥1).
-                preserve_pitch: Whether to preserve audio pitch.
-                enhance_audio: Whether to enhance audio.
-                use_opencl: Enable OpenCL hardware acceleration.
-                use_avx2: Enable AVX2 hardware acceleration.
-                use_aocl: Enable AOCL hardware acceleration.
+        # Validate boolean parameters
+        bool_params = {
+            'preserve_pitch': preserve_pitch,
+            'enhance_audio': enhance_audio,
+            'use_opencl': use_opencl,
+            'use_avx2': use_avx2,
+            'use_aocl': use_aocl
+        }
+        
+        for param, value in bool_params.items():
+            if not isinstance(value, bool):
+                return f"Invalid type for {param.replace('_', ' ')} - must be boolean"
 
-            Returns:
-                str: Success or error message.
-            """
-            if not (0 <= motion_threshold <= 1):
-                return "Motion threshold must be between 0 and 1"
-            if min_scene_duration <= 0:
-                return "Minimum scene duration must be positive"
-            if max_speed < 1:
-                return "Maximum speed factor must be at least 1"
-
-            try:
-                new_settings = {
-                    'motion_threshold': motion_threshold,
-                    'min_scene_duration': min_scene_duration,
-                    'max_speed_factor': max_speed,
-                    'preserve_pitch': preserve_pitch,
-                    'enhance_audio': enhance_audio,
-                    'hardware_preferences': {
-                        'use_opencl': use_opencl,
-                        'use_avx2': use_avx2,
-                        'use_aocl': use_aocl
-                    }
+        try:
+            # Create structured settings with explicit typing
+            new_settings = {
+                'motion_threshold': float(motion_threshold),
+                'min_scene_duration': float(min_scene_duration),
+                'max_speed_factor': float(max_speed),
+                'preserve_pitch': bool(preserve_pitch),
+                'enhance_audio': bool(enhance_audio),
+                'hardware_preferences': {
+                    'use_opencl': bool(use_opencl),
+                    'use_avx2': bool(use_avx2),
+                    'use_aocl': bool(use_aocl)
                 }
-                # Update global configurations (adjust based on your imports)
-                PROCESSING_CONFIG.update(new_settings)
-                AUDIO_CONFIG['preserve_pitch'] = preserve_pitch
-                AUDIO_CONFIG['enhance_audio'] = enhance_audio
+            }
 
-                persistent_file = os.path.join("data", "persistent.json")
-                with open(persistent_file, "w") as f:
-                    json.dump(new_settings, f, indent=4)
-                return "Settings saved successfully"
-            except Exception as e:
-                return f"Error saving settings: {e}"
+            # Merge with existing config to preserve unmodified settings
+            full_config = {**PROCESSING_CONFIG, **new_settings}
+            full_config['hardware_preferences'] = {
+                **PROCESSING_CONFIG.get('hardware_preferences', {}),
+                **new_settings['hardware_preferences']
+            }
+
+            # Update audio config separately
+            AUDIO_CONFIG.update({
+                'preserve_pitch': new_settings['preserve_pitch'],
+                'enhance_audio': new_settings['enhance_audio']
+            })
+
+            # Save to persistent storage
+            persistent_file = os.path.join("data", "persistent.json")
+            with open(persistent_file, "w") as f:
+                json.dump(full_config, f, indent=4, default=str)
+
+            # Update runtime configurations
+            PROCESSING_CONFIG.update(full_config)
+            
+            print("Info: Settings saved successfully")
+            time.sleep(1)
+            return "Settings saved successfully"
+            
+        except Exception as e:
+            print(f"Error: Settings save failed - {e}")
+            time.sleep(5)
+            return f"Error saving settings: {str(e)}"
 
     def _reset_settings(self) -> List[Any]:
         """Reset settings to defaults."""
         return [
-            self.config.motion_threshold,
-            self.config.min_scene_duration,
-            self.config.max_speed_factor,
-            self.config.preserve_pitch,
-            self.config.enhance_audio,
+            self.config['motion_threshold'],  # Ensure all references use dict syntax
+            self.config['min_scene_duration'],
+            self.config['max_speed_factor'],
+            AUDIO_CONFIG['preserve_pitch'],
+            AUDIO_CONFIG['enhance_audio'],
             True,  # use_opencl
             True,  # use_avx2
             True   # use_aocl
@@ -524,30 +601,52 @@ class InterfaceManager:
 
     def _refresh_log(self) -> Tuple[str, str]:
         """Refresh log display."""
-        log_content = self.log_manager.get_recent_logs()
+        print("Info: Logging is disabled.")
+        time.sleep(1)
         metrics = self.metrics.get_metrics_report()
-        return log_content, metrics
+        return "Logging is disabled.", metrics
 
     def _clear_log(self) -> str:
         """Clear the log content."""
-        try:
-            self.log_manager.clear_logs()
-            return "Log cleared"
-        except Exception as e:
-            return f"Error clearing log: {e}"
+        print("Info: No logs to clear.")
+        time.sleep(1)
+        return "No logs to clear."
 
     def _get_input_files(self) -> List[str]:
-        """Get list of video files in input directory."""
+        """Get valid files from input directory."""
         try:
             if not os.path.exists("input"):
                 os.makedirs("input")
+                
+            files = [f for f in os.listdir("input")
+                    if f.lower().endswith(('.mp4', '.avi', '.mkv'))]
+            return files
             
-            return [f for f in os.listdir("input")
-                   if f.lower().endswith(('.mp4', '.avi', '.mkv'))]
         except Exception as e:
             print(f"Error: Listing input files failed - {e}")
             time.sleep(5)
             return []
+
+    def _update_file_list(self) -> List[Dict]:
+        """Update file list with validation and proper component states."""
+        files = self._get_input_files()
+        has_files = bool(files)
+        
+        return [
+            gr.CheckboxGroup.update(
+                choices=files,
+                value=[],
+                interactive=has_files
+            ),
+            gr.Markdown.update(
+                value="⚠️ Add videos to input directory first" if not has_files else "",
+                visible=not has_files
+            ),
+            gr.Button.update(
+                interactive=has_files,
+                variant="primary" if has_files else "secondary"
+            )
+        ]
 
     def _update_button_states(self) -> Dict[gr.Button, Dict[str, bool]]:
         """Update button states based on processing status."""
@@ -606,7 +705,8 @@ class InterfaceManager:
             server_port=7860,
             share=False,
             inbrowser=True,
-            show_error=True
+            show_error=True,
+            prevent_thread_lock=True  # Add this line
         )
 
     def _create_batch_queue_display(self) -> None:
@@ -615,14 +715,13 @@ class InterfaceManager:
             gr.Markdown("### Processing Queue")
             self.queue_display = gr.Dataframe(
                 headers=["File", "Status", "Progress"],
+                datatype=["str", "str", "str"],
                 row_count=10,
                 col_count=3,
+                value=[["", "", ""]],  # Initialize with empty data
                 interactive=False
             )
-            self.queue_progress = gr.Progress(
-                label="Overall Progress",
-                show_progress=True
-            )
+            self.queue_progress = gr.Progress()
             with gr.Row():
                 self.queue_up_btn = gr.Button("Move Up")
                 self.queue_down_btn = gr.Button("Move Down")
@@ -688,16 +787,15 @@ def launch_gradio_interface():
         sys.exit(1)
 
 if __name__ == "__main__":
-    try:        
-        # Launch interface
+    try:
         print("\nLaunching Movie Consolidator interface...")
-        launch_gradio_interface(log_manager)
-        
+        time.sleep(1)
+        launch_gradio_interface()  # Remove log_manager
     except KeyboardInterrupt:
         print("\nShutdown requested by user")
+        time.sleep(1)
         sys.exit(0)
-        
     except Exception as e:
-        print(f"\nError: Unexpected error - {e}")  # Replaced log_event
+        print(f"\nError: Unexpected error - {e}")
         time.sleep(5)
         sys.exit(1)
