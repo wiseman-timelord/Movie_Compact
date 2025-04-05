@@ -108,7 +108,7 @@ HARDWARE_CONFIG = {
 PATHS = {
     'input': 'input',
     'output': 'output',
-    'work': 'work',
+    'work': 'data/temp',
     'data': 'data'
 }
 

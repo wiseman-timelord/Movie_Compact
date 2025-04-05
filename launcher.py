@@ -39,7 +39,7 @@ class MovieCompact:
         self.memory_manager = MemoryManager()
         self.error_handler = ErrorHandler()
         
-        self.required_dirs = ["data", "input", "output", "work"]
+        self.required_dirs = ["data", "data/temp", "input", "output"]
         self.required_files = [
             os.path.join("data", "persistent.json"),
             os.path.join("data", "requirements.txt"),

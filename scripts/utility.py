@@ -10,7 +10,7 @@ from threading import Lock, Event
 from queue import Queue
 from scripts.exceptions import (HardwareError, ConfigurationError, MovieCompactError)
 from scripts.temporary import (
-    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, HARDWARE_CONFIG, BASE_DIR
+    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, HARDWARE_CONFIG, BASE_DIR, get_full_path
 )
 
 # OpenCL setup (global for reuse)
@@ -650,9 +650,9 @@ class SceneManager:
         return sum(weights[k] * scores[k] for k in weights)
 
 class PreviewGenerator:
-    def __init__(self, work_dir: str = 'work'):
-        self.work_dir = work_dir
-        os.makedirs(work_dir, exist_ok=True)
+    def __init__(self, work_dir: Optional[str] = None):
+        self.work_dir = work_dir if work_dir is not None else get_full_path('work')
+        os.makedirs(self.work_dir, exist_ok=True)
 
     def create_preview(self, input_path: str) -> str:
         """
@@ -834,9 +834,9 @@ class AudioAnalyzer:
 # Functions...
 def cleanup_work_directory() -> None:
     """Silently clean and recreate the work directory."""
-    work_dir = "work"
+    work_dir = get_full_path('work')
     shutil.rmtree(work_dir, ignore_errors=True)  # Force delete without raising errors
-    os.makedirs(work_dir, exist_ok=True)  
+    os.makedirs(work_dir, exist_ok=True)
         
 def load_settings() -> Dict[str, Any]:
     """Load settings from persistent.json."""

@@ -41,7 +41,7 @@ def clean_previous_installation():
 def ensure_directories():
     """Create all required directories if they don't exist."""
     print("Creating required directories...")
-    directories = ["data", "input", "output", "work", "scripts"]
+    directories = ["data", "data/temp", "input", "output", "scripts"]
     for directory in directories:
         path = os.path.join(BASE_DIR, directory)
         if not os.path.exists(path):
@@ -163,7 +163,7 @@ def create_persistent_json(hardware_info):
         "paths": {
             "input_path": "input",
             "output_path": "output",
-            "work_path": "work"
+            "work_path": "data/temp"  # Changed from "work"
         },
         "scene_settings": {
             "min_scene_length": 2,
@@ -186,7 +186,7 @@ def create_persistent_json(hardware_info):
 def verify_installation():
     """Verify all required files and directories exist."""
     print("\nVerifying installation...")
-    required_dirs = [os.path.join(BASE_DIR, d) for d in ["data", "input", "output", "work"]]
+    required_dirs = [os.path.join(BASE_DIR, d) for d in ["data", "data/temp", "input", "output"]]
     required_files = [os.path.join(BASE_DIR, "data", f) for f in ["persistent.json", "requirements.txt", "hardware.json"]]
     
     status = True
