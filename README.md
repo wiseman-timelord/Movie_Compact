@@ -38,7 +38,7 @@ A sophisticated video processing application that creates condensed, action-focu
 ## Development
 1. At stage of bugfixing Gradio initialization. Repeating issues with error in launching gradio interface. Ai systems are stumped @ 2025/04.
 2. Need to simplify the Json, for some reason its creating 2 instead of 1. check new document in Notepad++ for current prompt.
-3 When Initialization bugfixing is complete or if bugfixing is unable to be completed, then optimize scripts, use more intelligent code to achieve the same result with less overall characters, then as applicable try the bugfix again.
+3. When Initialization bugfixing is complete or if bugfixing is unable to be completed, then optimize scripts, use more intelligent code to achieve the same result with less overall characters, then as applicable try the bugfix again.
 
 ### Outline
 - Details of the outline...
