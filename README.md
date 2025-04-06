@@ -36,8 +36,8 @@ A sophisticated video processing application that creates condensed, action-focu
 - Link for, information about and downloading of, the AVX/2/512 enhancement [AOCL](https://www.amd.com/en/developer/aocl.html) on AMD.Com.
 
 ## Development
-1. At stage of bugfixing Gradio initialization. Repeating issues with error in launching gradio interface. Ai systems are stumped @ 2025/04.
-2. Need to simplify the Json, for some reason its creating 2 instead of 1. check new document in Notepad++ for current prompt.
+1. Simplifying the Json, for some reason it was creating 2 instead of 1. So long as it can handle the 1, then there will be less complexity and confusion in the scripts relating to jsons programatically, so long as it can handle the longer json, and if not then progress to YAML.
+2. At stage of bugfixing Gradio initialization. Repeating issues with error in launching gradio interface. Ai systems are stumped @ 2025/04.
 3. When Initialization bugfixing is complete or if bugfixing is unable to be completed, then optimize scripts, use more intelligent code to achieve the same result with less overall characters, then as applicable try the bugfix again.
 
 ### Outline
