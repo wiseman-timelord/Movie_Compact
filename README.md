@@ -18,13 +18,10 @@ A sophisticated video processing application that creates condensed, action-focu
 - [Screenshots to be added showing interface and processing stages]
 
 ## Requirements
-- **Python 3.8+**
-- **OS**: Windows v?
-- **Hardware**: 
-  - x64 architecture
-  - AVX2 support
-  - OpenCL compatible GPU
-  - Minimum 8GB RAM recommended
+- Python => 3.8+ - Libraries are compatible with these versions.
+- Windows v? - Assumed v7-v11
+- Hardware - Programmed towards, x64, AVX2, OpenCL.
+- System Memory - Probably => 16GB RAM.
 
 ## Usage
 1. Run the batch and select the install process, ensure to check that things install correctly.
