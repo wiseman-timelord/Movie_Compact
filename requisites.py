@@ -1,6 +1,3 @@
-# Script: `.\requisites.py`
-
-# Imports
 import os
 import shutil
 import subprocess
@@ -12,7 +9,7 @@ import platform
 # Globals
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Functions...
+# Functions
 def clean_previous_installation():
     """Remove existing installation artifacts from previous runs."""
     print("Cleaning previous installation...")
@@ -53,7 +50,6 @@ def create_init_py():
     """Create essential initialization files."""
     print("\nCreating essential files...")
     
-    # Create scripts/__init__.py
     scripts_init = os.path.join(BASE_DIR, "scripts", "__init__.py")
     if not os.path.exists(scripts_init):
         with open(scripts_init, "w") as f:
@@ -87,7 +83,7 @@ def create_requirements_file():
     print("Created requirements.txt in the data directory.")
 
 def detect_hardware():
-    """Detect system hardware capabilities (no longer saves to hardware.json)."""
+    """Detect system hardware capabilities."""
     print("Detecting hardware capabilities...")
     hardware_info = {
         "x64": platform.machine().endswith("64"),
@@ -114,58 +110,44 @@ def detect_hardware():
         print(f"Error detecting OpenCL: {e}")
         time.sleep(5)
 
-    return hardware_info  # Return data instead of saving to file
+    return hardware_info
 
 def create_persistent_json(hardware_info):
-    """Create persistent.json with unified configuration."""
-    print("Creating persistent.json with unified configuration...")
+    """Create or overwrite persistent.json with unified configuration."""
+    print("Creating/Updating persistent.json with unified configuration...")
     
     default_settings = {
-        # Hardware Configuration (detected capabilities)
         "hardware_config": hardware_info,
-        
-        # Processing Configuration
         "processing_config": {
-            # Video Settings
             "preview_height": 360,
             "target_height": 720,
             "frame_sample_rate": 30,
             "supported_formats": [".mp4", ".avi", ".mkv"],
             "output_codec": "libx264",
             "audio_codec": "aac",
-            
-            # Hardware Acceleration Preferences
             "hardware_acceleration": {
                 "use_gpu": True,
                 "use_opencl": hardware_info.get("OpenCL", False),
                 "use_avx2": hardware_info.get("AVX2", False),
                 "opencl_platform_preference": ["NVIDIA", "AMD", "Intel"]
             },
-            
-            # Performance Settings
             "performance": {
                 "gpu_batch_size": 32,
                 "cpu_threads": 4,
                 "frame_buffer_size": 30
             },
-            
-            # Scene Detection
             "static_threshold": 0.98,
             "menu_threshold": 0.85,
             "motion_threshold": 0.3,
             "texture_threshold": 0.4,
             "min_scene_duration": 2.0,
             "max_scene_duration": 300.0,
-            
-            # Speed Adjustment
             "speed_settings": {
                 "max_speed_factor": 4.0,
                 "min_speed_factor": 1.0,
                 "transition_frames": 30
             }
         },
-        
-        # Audio Configuration
         "audio_config": {
             "sample_rate": 44100,
             "window_size": 2048,
@@ -173,8 +155,6 @@ def create_persistent_json(hardware_info):
             "preserve_pitch": True,
             "enhance_audio": True
         },
-        
-        # Path Configuration
         "path_config": {
             "input_path": "input",
             "output_path": "output",
@@ -183,9 +163,14 @@ def create_persistent_json(hardware_info):
     }
 
     persistent_file = os.path.join(BASE_DIR, "data", "persistent.json")
+    if os.path.exists(persistent_file):
+        print("persistent.json already exists. Overwriting with new configuration.")
+    else:
+        print("Creating new persistent.json with configuration.")
+    
     with open(persistent_file, "w") as f:
         json.dump(default_settings, f, indent=4)
-    print("Created unified persistent.json configuration.")
+    print(f"persistent.json created/updated with hardware info: {hardware_info}")
 
 def verify_installation():
     """Verify installation with new config structure."""
@@ -196,11 +181,8 @@ def verify_installation():
         os.path.join(BASE_DIR, "scripts", "__init__.py")
     ]
     
-    # Check directory structure
     dirs = ["data", "data/temp", "input", "output", "scripts"]
     missing_dirs = [d for d in dirs if not os.path.exists(os.path.join(BASE_DIR, d))]
-    
-    # Check required files
     missing_files = [f for f in required if not os.path.exists(f)]
     
     if not missing_dirs and not missing_files:
@@ -233,48 +215,59 @@ def main():
             create_init_py()
             create_requirements_file()
             
-            # Setup virtual environment
             print("Not running in virtual environment. Setting up virtual environment...")
             venv_path = os.path.join(BASE_DIR, "venv")
             
-            # Remove residual venv if exists
             if os.path.exists(venv_path):
                 print("Removing residual virtual environment...")
                 shutil.rmtree(venv_path)
                 time.sleep(1)
             
-            # Create new venv
             print("Creating new virtual environment...")
-            subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+            try:
+                subprocess.check_call([sys.executable, "-m", "venv", venv_path])
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to create virtual environment: {e}")
+                time.sleep(5)
+                return False
+            
             venv_python = os.path.join(venv_path, "Scripts", "python.exe") if sys.platform == "win32" else os.path.join(venv_path, "bin", "python")
             req_file = os.path.join(BASE_DIR, "data", "requirements.txt")
             
-            # Upgrade pip first
             print("Upgrading pip...")
-            subprocess.check_call([venv_python, "-m", "pip", "install", "--upgrade", "pip"])
+            try:
+                subprocess.check_call([venv_python, "-m", "pip", "install", "--upgrade", "pip"])
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to upgrade pip: {e}")
+                time.sleep(5)
+                return False
             
-            # Install wheel and requirements
             print("Installing wheel package...")
-            subprocess.check_call([venv_python, "-m", "pip", "install", "wheel"])
-            print("Installing requirements into virtual environment...")
-            subprocess.check_call([venv_python, "-m", "pip", "install", "--use-pep517", "-r", req_file])
+            try:
+                subprocess.check_call([venv_python, "-m", "pip", "install", "wheel"])
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to install wheel: {e}")
+                time.sleep(5)
+                return False
             
-            # Restart script in venv
+            print("Installing requirements into virtual environment...")
+            try:
+                subprocess.check_call([venv_python, "-m", "pip", "install", "--use-pep517", "-r", req_file])
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to install requirements: {e}")
+                time.sleep(5)
+                return False
+            
             print("Restarting script with virtual environment...")
             subprocess.check_call([venv_python, __file__])
             sys.exit(0)
         else:
             # Running in venv: configuration steps
             print("Running in virtual environment.")
-            
-            # Ensure directories exist (no cleanup)
             ensure_directories()
-            
-            # Detect hardware and create config
             hardware_info = detect_hardware()
             create_persistent_json(hardware_info)
             
-            # Verify installation
             if not verify_installation():
                 print("Installation failed verification checks.")
                 time.sleep(3)

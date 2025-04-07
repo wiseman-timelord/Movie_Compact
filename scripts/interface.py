@@ -28,32 +28,42 @@ from scripts.temporary import (
     update_processing_state,
     AUDIO_CONFIG  # Add this line
 )
-from .process import VideoProcessor, BatchProcessor
+from scripts.analyze import VideoAnalyzer
+from scripts.process import VideoProcessor, BatchProcessor
 
+
+# Classes...
 class InterfaceManager:
     def __init__(self):
-        self.core = CoreUtilities()
-        self.config = PROCESSING_CONFIG
-        self.progress_config = PROGRESS_CONFIG
-        self.error_config = ERROR_CONFIG
+        self.core = CoreUtilities()  # Core utilities instance
+        self.config = PROCESSING_CONFIG  # MUST COME FIRST
+        self.file_processor = FileProcessor(
+            supported_formats=self.config['supported_formats']
+        )
         self.settings = load_settings()
-        self.hardware_capabilities = self.settings['hardware_config']     
-        self.processor = VideoProcessor()  # No log_manager
+        self.hardware_capabilities = self.settings['hardware_config']
+        self.analyzer = VideoAnalyzer(settings=self.settings)
+        self.processor = VideoProcessor(settings=self.settings, analyzer=self.analyzer)
         self.batch_processor = BatchProcessor()
-        self.file_processor = FileProcessor(self.config['supported_formats'])
-        self.memory_manager = MemoryManager()
-        self.error_handler = ErrorHandler()
-        self.metrics = MetricsCollector()
         self.processing_lock = Lock()
-        self.cancel_flag = Event()
-        self.current_video_info = None
-        self.selected_files: List[str] = []
-        print(f"Debug: Initializing InterfaceManager with input dir: {os.path.abspath('input')}")
-        files = self._get_input_files()
-        if not files:
-            print("INFO: No files found in '.\input'.")
-        else:
-            print(f"Debug: Found {len(files)} files in input dir: {files}")
+
+    def _handle_batch_processing(self, selected_files: List[str], target_duration: float) -> str:
+        """Handle batch processing of multiple video files."""
+        if not selected_files:
+            return "No files selected"
+        with self.processing_lock:  # Ensure thread-safe processing
+            for file in selected_files:
+                input_path = os.path.join("input", file)
+                output_path = os.path.join("output", f"processed_{int(time.time())}_{file}")
+                self.batch_processor.add_to_queue(input_path, output_path, target_duration * 60)
+            self.batch_processor.process_queue(self._update_progress)
+            return "Batch processing complete"
+
+    def _update_progress(self, stage: str, progress: float, message: str) -> None:
+        """Update progress bar and status in a thread-safe manner."""
+        with self.processing_lock:
+            self.progress_bar.update(progress / 100)  # Assume progress_bar exists (e.g., GUI component)
+            self.status_output.update(f"Stage: {stage}\nProgress: {progress:.1f}%\n{message}")  # Assume status_output exists
 
     def create_interface(self) -> gr.Blocks:
         """Create and configure the Gradio interface."""
