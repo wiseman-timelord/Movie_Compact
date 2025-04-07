@@ -1,5 +1,5 @@
 # Movie_Compact
-Status: Alpha (code implemented)
+Status: Alpha (code implemented, error on startup, see development)
 
 ## Description
 A sophisticated video processing application that creates condensed, action-focused feature movies from long-play gaming videos, using advanced motion, texture, and audio analysis. Features a user-friendly Gradio interface with real-time progress tracking and comprehensive controls.
