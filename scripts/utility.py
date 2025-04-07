@@ -2,6 +2,8 @@
 
 # Imports...
 import os, cv2, time
+import moviepy.editor as mp
+from dataclasses import dataclass
 import numpy as np
 import pyopencl as cl
 import json, datetime, sys, psutil, librosa, shutil, gc
@@ -50,6 +52,15 @@ __kernel void frame_diff(__global const uchar *frame1, __global const uchar *fra
 }
 """
 prg = cl.Program(context, kernel_code).build()
+
+# Dataclasses
+@dataclass
+class SceneData:
+    start_frame: int          # Starting frame of the scene
+    end_frame: int            # Ending frame of the scene
+    scene_type: str           # Type of scene (e.g., 'static', 'menu', 'action')
+    speed_factor: float       # Speed adjustment factor for the scene
+    transitions: list         # List of transitions (could be strings or objects)
 
 # Classes...
 class CoreUtilities:
@@ -468,7 +479,6 @@ class SceneManager:
             time.sleep(5)
 
     def initialize_scene(self, start_frame: int) -> Dict[str, Any]:
-        """Initialize a new scene."""
         return {
             'start_frame': start_frame,
             'end_frame': None,
@@ -479,30 +489,41 @@ class SceneManager:
             'audio_activity': 0.0,
             'frame_count': 0,
             'complexity': 0.0,
-            'transitions': []
+            'transitions': [],
+            'prev_frame': None  # Add prev_frame
         }
 
-    def update_scene(self, scene: Dict[str, Any], frame: np.ndarray,
-                    frame_index: int) -> Dict[str, Any]:
-        """Update scene information with new frame."""
-        scene['frame_count'] += 1
-        scene['end_frame'] = frame_index
-        
-        if scene['frame_count'] > 1:
-            motion = detect_motion_opencl(frame, frame, 0.5)
-            scene['motion_score'] = (
-                (scene['motion_score'] * (scene['frame_count']-1) + float(motion)) /
-                scene['frame_count']
-            )
-        
-        if detect_menu_screen(frame):
-            scene['is_menu'] = True
-            
-        # Update scene complexity
-        scene['complexity'] = self._calculate_scene_complexity(frame, scene['complexity'],
-                                                             scene['frame_count'])
-        
-        return scene
+    def _process_scene_segment(self, clip: mp.VideoFileClip, scene: SceneData) -> mp.VideoFileClip:
+        try:
+            if scene.scene_type == 'static':
+                return self._process_static_scene(clip)
+            if scene.scene_type == 'menu':
+                return self._process_menu_scene(clip)
+            if scene.scene_type == 'action':
+                return clip.copy()
+
+            # Apply speed adjustment to video only
+            processed_video = self._apply_speed_adjustment(clip, scene.speed_factor, scene.transitions)
+
+            # Process audio if present
+            if clip.audio is not None and self.config['enhance_audio']:
+                original_audio = clip.audio.to_soundarray()
+                new_duration = processed_video.duration
+                original_duration = clip.duration
+                rate = original_duration / new_duration if new_duration > 0 else 1.0
+
+                processed_audio = self.audio_processor.process_audio(original_audio, rate)
+                audio_clip = mp.AudioArrayClip(processed_audio, fps=clip.audio.fps)
+                processed = processed_video.set_audio(audio_clip)
+            else:
+                processed = processed_video
+
+            return processed
+        except Exception as e:
+            self.error_handler.handle_error(e, "segment_processing")
+            print(f"Error: Failed to process scene segment - {e}")
+            time.sleep(5)
+            return clip.copy()
 
     def _calculate_scene_complexity(self, frame: np.ndarray, current_complexity: float,
                                   frame_count: int) -> float:

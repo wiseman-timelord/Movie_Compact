@@ -40,17 +40,16 @@ from scripts.utility import (
 
 # Classes...
 class VideoProcessor:
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, analyzer=None):
         self.core = CoreUtilities()
-        self.settings = settings or load_settings()  # Ensure settings is loaded
+        self.settings = settings or load_settings()
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
         self.speed_config = SPEED_CONFIG
         self.memory_config = MEMORY_CONFIG
         self.hardware_capabilities = self.settings['hardware_config']
-        self.settings = settings or load_settings()
         
-        self.analyzer = VideoAnalyzer()
+        self.analyzer = analyzer  # Use provided analyzer
         self.audio_processor = AudioProcessor()
         self.memory_manager = MemoryManager()
         self.progress = ProgressMonitor()
@@ -113,7 +112,7 @@ class VideoProcessor:
             return None
 
     def _process_scenes(self, input_path: str, 
-                       scenes: List[SceneData]) -> List[mp.VideoFileClip]:
+                        scenes: List[SceneData]) -> List[mp.VideoFileClip]:
         """Process individual scenes."""
         try:
             clip = mp.VideoFileClip(input_path)
@@ -127,41 +126,66 @@ class VideoProcessor:
                 total_scenes=total_scenes
             )
 
+            # Preload video properties to avoid redundant access
+            fps = clip.fps
+            if GLOBAL_STATE.current_video is None or GLOBAL_STATE.current_video.fps != fps:
+                GLOBAL_STATE.current_video = type('Video', (), {'fps': fps})()
+
             for i, scene in enumerate(scenes):
                 if self.cancel_flag.is_set():
+                    print("Info: Processing canceled by user")
                     break
 
-                progress = (i + 1) / total_scenes * 50
+                progress = 40 + ((i + 1) / total_scenes * 50)  # Start at 40%, end at 90%
                 self.progress.update_progress(
                     progress,
                     f"Processing scene {i+1}/{total_scenes}"
                 )
 
-                scene_clip = clip.subclip(
-                    scene.start_frame / GLOBAL_STATE.current_video.fps,
-                    scene.end_frame / GLOBAL_STATE.current_video.fps
-                )
+                # Calculate scene time boundaries
+                start_time = scene.start_frame / fps
+                end_time = scene.end_frame / fps
+                
+                # Ensure valid time range
+                if start_time >= clip.duration or end_time <= start_time:
+                    print(f"Warning: Skipping invalid scene {i+1}: {start_time:.2f}s - {end_time:.2f}s")
+                    continue
 
-                processed_clip = self._process_scene_segment(
-                    scene_clip,
-                    scene
-                )
-                processed_scenes.append(processed_clip)
+                scene_clip = clip.subclip(start_time, min(end_time, clip.duration))
+
+                # Process the scene segment with proper audio handling
+                processed_clip = self._process_scene_segment(scene_clip, scene)
+                if processed_clip:
+                    processed_scenes.append(processed_clip)
+                else:
+                    print(f"Warning: Scene {i+1} processing failed, skipping")
 
                 update_processing_state(
-                    processed_scenes=i+1,
+                    processed_scenes=len(processed_scenes),
                     progress=progress
                 )
 
-                if self.memory_manager.check_memory()['warning']:
+                # Memory management with detailed feedback
+                memory_status = self.memory_manager.check_memory()
+                if memory_status['warning']:
+                    print("Info: Memory warning detected, triggering cleanup")
                     self.memory_manager.cleanup()
+                    if self.memory_manager.check_memory()['critical']:
+                        print("Error: Critical memory shortage after cleanup, aborting")
+                        break
 
             clip.close()
+            self.progress.update_progress(90, "Scene processing complete")
             return processed_scenes
 
         except Exception as e:
             self.error_handler.handle_error(e, "scene_processing")
+            print(f"Error: Scene processing failed - {str(e)}")
             return []
+        finally:
+            # Ensure clip is closed even on exception
+            if 'clip' in locals():
+                clip.close()
 
     def _process_scene_segment(self, clip: mp.VideoFileClip,
                               scene: SceneData) -> mp.VideoFileClip:

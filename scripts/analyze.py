@@ -144,8 +144,7 @@ class VideoAnalyzer:
         self.error_handler = ErrorHandler()
         self.frame_buffer = deque(maxlen=self.memory_config['frame_buffer_size'])
 
-    def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray,
-                        target_duration: float) -> List[Dict[str, Any]]:
+    def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray, target_duration: float) -> List[Dict[str, Any]]:
         self.progress.update_progress(40, "Processing scenes")
         scenes = []
         

@@ -45,9 +45,9 @@ class MovieCompact:
         
         self.validate_environment()
         
-        # Pass settings to components
-        self.processor = VideoProcessor(settings=self.settings)
-        self.analyzer = VideoAnalyzer(settings=self.settings)
+        # Pass settings to components (in dependency order)
+        self.analyzer = VideoAnalyzer(settings=self.settings)  # Initialize analyzer first
+        self.processor = VideoProcessor(settings=self.settings, analyzer=self.analyzer)  # Then processor
         self.audio_analyzer = AudioAnalyzer()
         self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)
         self.preview_generator = PreviewGenerator()
