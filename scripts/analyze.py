@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Tuple, Optional, Generator, Union
 from dataclasses import dataclass
 from scripts.exceptions import AnalysisError, MovieCompactError
 from scripts.utility import (
-    load_hardware_config,
     load_settings,  # Add this
     extract_frames_optimized, detect_motion_opencl, detect_motion_cpu,
     detect_texture_change, SceneManager, AudioAnalyzer, PreviewGenerator,
@@ -133,8 +132,8 @@ class VideoAnalyzer:
         self.scene_config = SCENE_CONFIG
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
-        self.hardware_capabilities = load_hardware_config()
-        self.settings = settings or load_settings()  # Fallback
+        self.settings = settings or load_settings()
+        self.hardware_capabilities = self.settings['hardware_config']
         
         self.content_analyzer = ContentAnalyzer()
         self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)

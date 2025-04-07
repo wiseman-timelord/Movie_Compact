@@ -1,6 +1,7 @@
 # interface.py
 
-import os, json, time, sys
+import os, json, time, sys, traceback, webbrowser
+from threading import Timer
 import gradio as gr
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from datetime import datetime
@@ -10,7 +11,6 @@ from threading import Lock, Event
 from scripts.exceptions import MovieCompactError, ProcessingError
 from scripts.utility import (
     load_settings,
-    load_hardware_config,  # Add this
     MetricsCollector,
     FileProcessor,
     MemoryManager,
@@ -36,8 +36,8 @@ class InterfaceManager:
         self.config = PROCESSING_CONFIG
         self.progress_config = PROGRESS_CONFIG
         self.error_config = ERROR_CONFIG
-        self.hardware_capabilities = load_hardware_config()  # Load hardware capabilities
-        
+        self.settings = load_settings()
+        self.hardware_capabilities = self.settings['hardware_config']     
         self.processor = VideoProcessor()  # No log_manager
         self.batch_processor = BatchProcessor()
         self.file_processor = FileProcessor(self.config['supported_formats'])
@@ -48,6 +48,12 @@ class InterfaceManager:
         self.cancel_flag = Event()
         self.current_video_info = None
         self.selected_files: List[str] = []
+        print(f"Debug: Initializing InterfaceManager with input dir: {os.path.abspath('input')}")
+        files = self._get_input_files()
+        if not files:
+            print("INFO: No files found in '.\input'.")
+        else:
+            print(f"Debug: Found {len(files)} files in input dir: {files}")
 
     def create_interface(self) -> gr.Blocks:
         """Create and configure the Gradio interface."""
@@ -137,18 +143,21 @@ class InterfaceManager:
                         self.clear_log_btn = gr.Button("Clear Log")
 
     def _create_batch_tab(self) -> None:
-        """Create batch processing tab."""
         with gr.Tab("Batch Processing"):
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Available Files")
+                    files = self._get_input_files()
                     self.file_list = gr.CheckboxGroup(
                         label="Select Files to Process",
-                        choices=[],
+                        choices=files,
                         value=[],
-                        interactive=False
+                        interactive=bool(files)
                     )
-                    self.batch_status_msg = gr.Markdown("No files found in input directory", visible=False)
+                    self.batch_status_msg = gr.Markdown(
+                        "⚠️ Add videos to input directory first",
+                        visible=not bool(files)
+                    )
                     
                     # Add refresh button
                     self.refresh_files_btn = gr.Button("Refresh File List")
@@ -222,11 +231,11 @@ class InterfaceManager:
                 with gr.Column():
                     gr.Markdown("### Hardware Preferences")
                     # Get actual detected capabilities from hardware.json
-                    hw_caps = load_hardware_config()
+                    hw_caps = self.settings['hardware_config']
                     
                     # Use explicit boolean checks with fallbacks
                     self.use_opencl = gr.Checkbox(
-                        value=bool(self.config.get("hardware_preferences", {}).get("use_opencl", False)),
+                        value=bool(self.config.get("hardware_acceleration", {}).get("use_opencl", False)),
                         label=f"Use OpenCL ({'Available' if hw_caps.get('OpenCL', False) else 'Unavailable'})",
                         interactive=hw_caps.get('OpenCL', False)
                     )
@@ -238,9 +247,9 @@ class InterfaceManager:
                     )
                     
                     self.use_aocl = gr.Checkbox(
-                        value=self.config.get("hardware_preferences", {}).get("use_aocl", False),  # Fixed reference
+                        value=bool(self.config.get("hardware_preferences", {}).get("use_aocl", False)),
                         label=f"Use AOCL ({'available' if self.hardware_capabilities.get('AOCL', False) else 'not available'})",
-                        interactive=self.hardware_capabilities.get('AOCL', False)
+                        interactive=bool(self.hardware_capabilities.get('AOCL', False))  # Explicit bool conversion
                     )
 
             with gr.Row():
@@ -303,11 +312,11 @@ class InterfaceManager:
     def _setup_event_handlers(self, interface: gr.Blocks) -> None:
         """Setup event handlers for interface elements."""
         # File selection handlers
-        self.video_input.change(
-            fn=self._handle_file_selection,
-            inputs=[self.video_input],
-            outputs=[self.video_info]
-        )
+        self.refresh_files_btn.click(
+                fn=self._update_file_list,
+                inputs=None,
+                outputs=[self.file_list, self.batch_status_msg, self.batch_process_btn]
+            )
 
         # Processing handlers
         self.process_btn.click(
@@ -316,14 +325,18 @@ class InterfaceManager:
             outputs=[self.status_output]
         ).then(
             fn=self._update_button_states,
-            outputs=[self.process_btn, self.cancel_btn]
+            inputs=None,
+            outputs=[self.process_btn, self.cancel_btn, self.video_input, self.target_duration]
         )
 
         self.cancel_btn.click(
-            fn=self._handle_cancellation
+            fn=self._handle_cancellation,
+            inputs=None,
+            outputs=[self.status_output]
         ).then(
             fn=self._update_button_states,
-            outputs=[self.process_btn, self.cancel_btn]
+            inputs=None,
+            outputs=[self.process_btn, self.cancel_btn, self.video_input, self.target_duration]
         )
 
         # Batch processing handlers
@@ -334,11 +347,11 @@ class InterfaceManager:
             preprocess=False  # Disable Gradio's input validation
         )
 
-        self.batch_process_btn.click(
-            fn=self._handle_batch_processing,
-            inputs=[self.file_list, self.batch_target_duration],
+        self.batch_cancel_btn.click(
+            fn=self._handle_batch_cancellation,
+            inputs=None,
             outputs=[self.batch_status],
-            preprocess=False  # Disable Gradio's input validation
+            queue=False
         )
 
         # Settings handlers
@@ -447,10 +460,10 @@ class InterfaceManager:
             except Exception as e:
                 return f"Processing error: {e}"
 
-    def _handle_cancellation(self) -> None:
-        """Handle processing cancellation."""
+    def _handle_cancellation(self) -> str:
         self.processor.cancel_processing()
         self.cancel_flag.set()
+        return "Processing cancelled"
 
     def _handle_batch_processing(self, selected_files: List[str],
                                target_duration: float) -> str:
@@ -549,7 +562,7 @@ class InterfaceManager:
                 'max_speed_factor': float(max_speed),
                 'preserve_pitch': bool(preserve_pitch),
                 'enhance_audio': bool(enhance_audio),
-                'hardware_preferences': {
+                'hardware_acceleration': {
                     'use_opencl': bool(use_opencl),
                     'use_avx2': bool(use_avx2),
                     'use_aocl': bool(use_aocl)
@@ -558,9 +571,9 @@ class InterfaceManager:
 
             # Merge with existing config to preserve unmodified settings
             full_config = {**PROCESSING_CONFIG, **new_settings}
-            full_config['hardware_preferences'] = {
-                **PROCESSING_CONFIG.get('hardware_preferences', {}),
-                **new_settings['hardware_preferences']
+            full_config['hardware_acceleration'] = {
+                **PROCESSING_CONFIG.get('hardware_acceleration', {}),
+                **new_settings['hardware_acceleration']
             }
 
             # Update audio config separately
@@ -615,48 +628,48 @@ class InterfaceManager:
     def _get_input_files(self) -> List[str]:
         """Get valid files from input directory."""
         try:
-            if not os.path.exists("input"):
-                os.makedirs("input")
-                
-            files = [f for f in os.listdir("input")
-                    if f.lower().endswith(('.mp4', '.avi', '.mkv'))]
-            return files
+            input_dir = os.path.abspath("input")
+            if not os.path.exists(input_dir):
+                os.makedirs(input_dir)
+                print(f"Info: Created input directory: {input_dir}")
+                time.sleep(1)
+                return []  # Return empty list instead of placeholder
             
+            supported_ext = tuple(ext.lower() for ext in self.file_processor.supported_formats)
+            return [f for f in os.listdir(input_dir)
+                    if os.path.splitext(f)[1].lower() in supported_ext]
+                    
         except Exception as e:
-            print(f"Error: Listing input files failed - {e}")
+            print(f"Error: Failed to list files in input directory - {e}")
             time.sleep(5)
             return []
 
     def _update_file_list(self) -> List[Dict]:
-        """Update file list with validation and proper component states."""
         files = self._get_input_files()
         has_files = bool(files)
         
+        # Return valid component updates without placeholder messages
         return [
             gr.CheckboxGroup.update(
-                choices=files,
-                value=[],
-                interactive=has_files
+                choices=files if files else [],
+                interactive=has_files,
+                value=[]
             ),
             gr.Markdown.update(
                 value="⚠️ Add videos to input directory first" if not has_files else "",
                 visible=not has_files
             ),
-            gr.Button.update(
-                interactive=has_files,
-                variant="primary" if has_files else "secondary"
-            )
+            gr.Button.update(interactive=has_files)
         ]
 
-    def _update_button_states(self) -> Dict[gr.Button, Dict[str, bool]]:
-        """Update button states based on processing status."""
+    def _update_button_states(self) -> Tuple[Dict, Dict, Dict, Dict]:
         is_processing = self.processing_lock.locked()
-        return {
-            self.process_btn: {"interactive": not is_processing},
-            self.cancel_btn: {"interactive": is_processing},
-            self.video_input: {"interactive": not is_processing},
-            self.target_duration: {"interactive": not is_processing}
-        }
+        return (
+            gr.Button.update(interactive=not is_processing),  # process_btn
+            gr.Button.update(interactive=is_processing),      # cancel_btn
+            gr.File.update(interactive=not is_processing),    # video_input
+            gr.Number.update(interactive=not is_processing)   # target_duration
+        )
 
     def _update_progress(self, stage: str, progress: float, message: str) -> None:
         """Update progress information."""
@@ -700,13 +713,11 @@ class InterfaceManager:
     def launch(self) -> None:
         """Launch the Gradio interface."""
         interface = self.create_interface()
-        interface.queue().launch(
-            server_name="0.0.0.0",
+        interface.launch(
+            server_name="127.0.0.1",  # Explicit localhost IP
             server_port=7860,
-            share=False,
-            inbrowser=True,
             show_error=True,
-            prevent_thread_lock=True  # Add this line
+            show_api=False  # Disable automatic API page
         )
 
     def _create_batch_queue_display(self) -> None:
@@ -716,10 +727,10 @@ class InterfaceManager:
             self.queue_display = gr.Dataframe(
                 headers=["File", "Status", "Progress"],
                 datatype=["str", "str", "str"],
-                row_count=10,
+                value=[],  # Empty array instead of placeholder rows
                 col_count=3,
-                value=[["", "", ""]],  # Initialize with empty data
-                interactive=False
+                interactive=False,
+                elem_id="queue_display"
             )
             self.queue_progress = gr.Progress()
             with gr.Row():
@@ -729,14 +740,23 @@ class InterfaceManager:
 
     def _update_queue_display(self) -> None:
         """Update queue display with current status."""
-        queue_data = []
-        for file_info in self.batch_processor.get_queue_status():
-            queue_data.append([
-                file_info['name'],
-                file_info['status'],
-                f"{file_info['progress']:.1f}%"
-            ])
-        self.queue_display.update(queue_data)
+        try:
+            queue_data = []
+            for file_info in self.batch_processor.get_queue_status():
+                queue_data.append([
+                    str(file_info.get('name', '')),
+                    str(file_info.get('status', 'Pending')),
+                    f"{file_info.get('progress', 0.0):.1f}%"
+                ])
+            
+            # Pad with empty rows to maintain fixed row count
+            while len(queue_data) < 5:
+                queue_data.append(["", "", ""])
+                
+            self.queue_display.update(value=queue_data)
+        except Exception as e:
+            print(f"Queue update error: {str(e)}")
+            self.error_handler.handle_error(e, "queue_display")
 
     def _manage_queue(self, action: str, selected_index: int) -> None:
         """Manage queue operations."""
@@ -778,12 +798,17 @@ class InterfaceManager:
 
 def launch_gradio_interface():
     try:
-        manager = InterfaceManager()  # No log_manager
+        print("\nDebug: Starting Gradio interface launch...")
+        manager = InterfaceManager()
+        print("Debug: InterfaceManager created, launching interface...")
         manager.launch()
+        print("Debug: Interface launched successfully")
+        while True:  # Keep the main thread alive
+            time.sleep(1)
     except Exception as e:
-        print(f"Error: Failed to launch interface - {e}")
+        print(f"Error: Failed to launch interface - {str(e)}")
+        print(f"Debug: Full traceback:\n{traceback.format_exc()}")
         time.sleep(5)
-        print(f"Error: Failed to launch interface - {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

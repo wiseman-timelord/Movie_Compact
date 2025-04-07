@@ -6,7 +6,6 @@ import os, sys, json, time, traceback
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 from scripts.utility import (
-    load_hardware_config,
     load_settings,
     cleanup_work_directory,
     AudioAnalyzer,
@@ -26,24 +25,21 @@ print("..Imports Initialized.")
 class MovieCompact:
     def __init__(self):
         from scripts.temporary import (
-            HARDWARE_CONFIG,
             PROCESSING_CONFIG,
-            MEMORY_CONFIG
+            MEMORY_CONFIG,
+            SCENE_CONFIG
         )
         
         self.core = CoreUtilities()
-        self.hardware_config = HARDWARE_CONFIG
+        self.settings = load_settings()
+        self.hardware_config = self.settings.get('hardware_config', {})
         self.processing_config = PROCESSING_CONFIG
         self.memory_config = MEMORY_CONFIG
-        self.settings = load_settings()
-        self.memory_manager = MemoryManager()
-        self.error_handler = ErrorHandler()
         
         self.required_dirs = ["data", "data/temp", "input", "output"]
         self.required_files = [
             os.path.join("data", "persistent.json"),
             os.path.join("data", "requirements.txt"),
-            os.path.join("data", "hardware.json"),
             os.path.join("scripts", "__init__.py")
         ]
         
@@ -53,7 +49,7 @@ class MovieCompact:
         self.processor = VideoProcessor(settings=self.settings)
         self.analyzer = VideoAnalyzer(settings=self.settings)
         self.audio_analyzer = AudioAnalyzer()
-        self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)  # Updated line
+        self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)
         self.preview_generator = PreviewGenerator()
 
     def validate_environment(self) -> None:
@@ -75,15 +71,19 @@ class MovieCompact:
             self.error_handler.handle_error(e, "environment_validation")
             sys.exit(1)
 
-    def print_hardware_info(self) -> None:
-        print("\nHardware Configuration:")
-        time.sleep(1)
-        # Display actual detected capabilities
-        print(f"GPU Acceleration: {'Enabled' if self.hardware_config['use_gpu'] else 'Disabled'}")
-        print(f"OpenCL Available: {self.hardware_config.get('opencl_available', False)}")
-        print(f"AVX2 Available: {self.hardware_config.get('avx2_available', False)}")
-        print(f"CPU Threads: {self.hardware_config['cpu_threads']}")
-        time.sleep(1)
+def print_hardware_info(self) -> None:
+    print("\nHardware Capabilities:")
+    hw_caps = self.settings['hardware_config']  # Consistent pattern
+    print(f"OpenCL Available: {hw_caps.get('OpenCL', False)}")
+    print(f"AVX2 Available: {hw_caps.get('AVX2', False)}")
+    print(f"AOCL Available: {hw_caps.get('AOCL', False)}")
+    print(f"x64 Architecture: {hw_caps.get('x64', False)}")
+    print("\nHardware Preferences:")
+    hw_prefs = self.settings['processing_config']['hardware_acceleration']
+    print(f"Use GPU: {hw_prefs.get('use_gpu', False)}")
+    print(f"Use OpenCL: {hw_prefs.get('use_opencl', False)}")
+    print(f"Use AVX2: {hw_prefs.get('use_avx2', False)}")
+    time.sleep(1)
 
     def validate_input_file(self, input_path: str) -> bool:
         if not os.path.exists(input_path):
@@ -159,13 +159,11 @@ def main():
         print("..Initialization Complete.")
         
         print("Program Starting..")
-        # Process command line arguments
         if len(sys.argv) > 1:
-            # GUI mode
             if sys.argv[1] == "--gui":
                 print("\nLaunching GUI interface...")
-                time.sleep(1)  # Normal message: 1s
-                launch_gradio_interface()  
+                time.sleep(1)
+                launch_gradio_interface()
             # CLI mode
             elif len(sys.argv) == 4:
                 input_path = sys.argv[1]
@@ -184,10 +182,9 @@ def main():
                 time.sleep(5)  # Error: 5s
                 print_usage()
         else:
-            # Default to GUI mode
             print("\nLaunching GUI interface...")
-            time.sleep(1)  # Normal message: 1s
-            launch_gradio_interface()  
+            time.sleep(1)
+            launch_gradio_interface() 
             
     except KeyboardInterrupt:
         print("\nInfo: Operation cancelled by user")

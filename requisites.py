@@ -87,7 +87,7 @@ def create_requirements_file():
     print("Created requirements.txt in the data directory.")
 
 def detect_hardware():
-    """Detect system hardware capabilities and save to hardware.json."""
+    """Detect system hardware capabilities (no longer saves to hardware.json)."""
     print("Detecting hardware capabilities...")
     hardware_info = {
         "x64": platform.machine().endswith("64"),
@@ -102,7 +102,7 @@ def detect_hardware():
         hardware_info["AVX2"] = "avx2" in cpu_info.get("flags", [])
     except Exception as e:
         print(f"Error detecting AVX2: {e}")
-        time.sleep(5)  # Pause for 5 seconds after error
+        time.sleep(5)
 
     try:
         import pyopencl as cl
@@ -112,101 +112,112 @@ def detect_hardware():
             hardware_info["AOCL"] = any("AMD" in p.name for p in platforms)
     except Exception as e:
         print(f"Error detecting OpenCL: {e}")
-        time.sleep(5)  # Pause for 5 seconds after error
+        time.sleep(5)
 
-    hardware_file = os.path.join(BASE_DIR, "data", "hardware.json")
-    with open(hardware_file, "w") as f:
-        json.dump(hardware_info, f, indent=4)
-    print("Hardware configuration saved to hardware.json")
-    return hardware_info
+    return hardware_info  # Return data instead of saving to file
 
 def create_persistent_json(hardware_info):
-    """Create persistent.json with hardware-appropriate defaults."""
-    print("Creating persistent.json with validated defaults...")
+    """Create persistent.json with unified configuration."""
+    print("Creating persistent.json with unified configuration...")
     
-    # Get actual hardware capabilities
-    opencl_enabled = hardware_info.get("OpenCL", False)
-    avx2_enabled = hardware_info.get("AVX2", False)
-    aocl_enabled = hardware_info.get("AOCL", False)
-
     default_settings = {
-        "motion_threshold": 0.5,
-        "texture_threshold": 0.6,
-        "audio_threshold": 0.7,
-        "frame_settings": {
-            "sample_rate": 30,
-            "min_segment": 2,
-            "max_segment": 30,
-            "batch_size": 100
-        },
-        "video_settings": {
-            "target_fps": 30,
-            "min_clip_length": 2,
-            "target_length": 30,
-            "resolution_height": 720,
-            "codec": "libx264",
+        # Hardware Configuration (detected capabilities)
+        "hardware_config": hardware_info,
+        
+        # Processing Configuration
+        "processing_config": {
+            # Video Settings
+            "preview_height": 360,
+            "target_height": 720,
+            "frame_sample_rate": 30,
+            "supported_formats": [".mp4", ".avi", ".mkv"],
+            "output_codec": "libx264",
             "audio_codec": "aac",
-            "preview_height": 360
+            
+            # Hardware Acceleration Preferences
+            "hardware_acceleration": {
+                "use_gpu": True,
+                "use_opencl": hardware_info.get("OpenCL", False),
+                "use_avx2": hardware_info.get("AVX2", False),
+                "opencl_platform_preference": ["NVIDIA", "AMD", "Intel"]
+            },
+            
+            # Performance Settings
+            "performance": {
+                "gpu_batch_size": 32,
+                "cpu_threads": 4,
+                "frame_buffer_size": 30
+            },
+            
+            # Scene Detection
+            "static_threshold": 0.98,
+            "menu_threshold": 0.85,
+            "motion_threshold": 0.3,
+            "texture_threshold": 0.4,
+            "min_scene_duration": 2.0,
+            "max_scene_duration": 300.0,
+            
+            # Speed Adjustment
+            "speed_settings": {
+                "max_speed_factor": 4.0,
+                "min_speed_factor": 1.0,
+                "transition_frames": 30
+            }
         },
-        "processor_settings": {
-            "use_gpu": True,
-            "cpu_cores": 4,
-            "opencl_enabled": opencl_enabled,  # Use detected value
-            "avx2_enabled": avx2_enabled,      # Use detected value
-            "gpu_batch_size": 32
+        
+        # Audio Configuration
+        "audio_config": {
+            "sample_rate": 44100,
+            "window_size": 2048,
+            "hop_length": 512,
+            "preserve_pitch": True,
+            "enhance_audio": True
         },
-        "hardware_preferences": {
-            "use_opencl": opencl_enabled,  # Match actual capability
-            "use_avx2": avx2_enabled,      # Match actual capability
-            "use_aocl": aocl_enabled       # Match actual capability
-        },
-        "paths": {
+        
+        # Path Configuration
+        "path_config": {
             "input_path": "input",
             "output_path": "output",
-            "work_path": "data/temp"  # Changed from "work"
-        },
-        "scene_settings": {
-            "min_scene_length": 2,
-            "max_scene_length": 300,
-            "scene_threshold": 30.0,
-            "action_threshold": 0.3
-        },
-        "speed_settings": {
-            "max_speed_factor": 4.0,
-            "min_speed_factor": 1.0,
-            "transition_frames": 30
+            "work_path": "data/temp"
         }
     }
 
     persistent_file = os.path.join(BASE_DIR, "data", "persistent.json")
     with open(persistent_file, "w") as f:
         json.dump(default_settings, f, indent=4)
-    print("Created hardware-validated persistent.json")
+    print("Created unified persistent.json configuration.")
 
 def verify_installation():
-    """Verify all required files and directories exist."""
+    """Verify installation with new config structure."""
     print("\nVerifying installation...")
-    required_dirs = [os.path.join(BASE_DIR, d) for d in ["data", "data/temp", "input", "output"]]
-    required_files = [os.path.join(BASE_DIR, "data", f) for f in ["persistent.json", "requirements.txt", "hardware.json"]]
+    required = [
+        os.path.join(BASE_DIR, "data", "persistent.json"),
+        os.path.join(BASE_DIR, "data", "requirements.txt"),
+        os.path.join(BASE_DIR, "scripts", "__init__.py")
+    ]
     
-    status = True
+    # Check directory structure
+    dirs = ["data", "data/temp", "input", "output", "scripts"]
+    missing_dirs = [d for d in dirs if not os.path.exists(os.path.join(BASE_DIR, d))]
     
-    for dir_path in required_dirs:
-        if not os.path.exists(dir_path):
-            print(f"ERROR: Directory {dir_path} is missing!")
-            status = False
+    # Check required files
+    missing_files = [f for f in required if not os.path.exists(f)]
     
-    for file_path in required_files:
-        if not os.path.exists(file_path):
-            print(f"ERROR: File {file_path} is missing!")
-            status = False
+    if not missing_dirs and not missing_files:
+        print("Installation verified successfully!")
+        return True
     
-    if status:
-        print("Installation verification successful!")
-    else:
-        print("Installation verification failed!")
-        time.sleep(5)  # Pause for 5 seconds if verification fails
-    return status
+    if missing_dirs:
+        print("Missing directories:")
+        for d in missing_dirs: print(f" - {d}")
+    
+    if missing_files:
+        print("Missing files:")
+        for f in missing_files: print(f" - {f}")
+    
+    print("Verification failed!")
+    time.sleep(5)
+    return False
 
 def main():
     """Main function to orchestrate the installation process."""

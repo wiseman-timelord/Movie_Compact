@@ -24,7 +24,6 @@ from scripts.temporary import (
 )
 from scripts.utility import (
     load_settings,
-    load_hardware_config,
     cleanup_work_directory,
     ProgressMonitor,
     MetricsCollector,
@@ -43,11 +42,12 @@ from scripts.utility import (
 class VideoProcessor:
     def __init__(self, settings=None):
         self.core = CoreUtilities()
+        self.settings = settings or load_settings()  # Ensure settings is loaded
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
         self.speed_config = SPEED_CONFIG
         self.memory_config = MEMORY_CONFIG
-        self.hardware_capabilities = load_hardware_config()
+        self.hardware_capabilities = self.settings['hardware_config']
         self.settings = settings or load_settings()
         
         self.analyzer = VideoAnalyzer()

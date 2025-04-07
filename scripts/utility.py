@@ -10,7 +10,7 @@ from threading import Lock, Event
 from queue import Queue
 from scripts.exceptions import (HardwareError, ConfigurationError, MovieCompactError)
 from scripts.temporary import (
-    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, HARDWARE_CONFIG, BASE_DIR, get_full_path
+    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, BASE_DIR, get_full_path
 )
 
 # OpenCL setup (global for reuse)
@@ -332,6 +332,19 @@ class ErrorHandler:
                 delay = self.retry_delay * (2 ** (retries - 1))
                 print(f"Info: Retry {retries}/{max_attempts} after {delay}s")  # Changed
                 time.sleep(1)  # Added
+
+    def handle_config_error(self, error: Exception) -> None:
+        """Special handler for configuration errors."""
+        error_info = {
+            'timestamp': datetime.datetime.now(),
+            'error': str(error),
+            'type': 'ConfigurationError',
+            'action': 'Check persistent.json format and version'
+        }
+        self.error_log.append(error_info)
+        print(f"CRITICAL CONFIG ERROR: {str(error)}")
+        time.sleep(5)
+        sys.exit(1)
 
 class AudioProcessor:
     def __init__(self, sample_rate: int = 44100):
@@ -839,39 +852,24 @@ def cleanup_work_directory() -> None:
     os.makedirs(work_dir, exist_ok=True)
         
 def load_settings() -> Dict[str, Any]:
-    """Load settings from persistent.json."""
     settings_path = os.path.join(BASE_DIR, "data", "persistent.json")
     try:
         with open(settings_path, "r") as f:
-            return json.load(f)
+            settings = json.load(f)
+            # Removed version check
+            if 'hardware_config' not in settings:
+                settings['hardware_config'] = {
+                    'OpenCL': False,
+                    'AVX2': False,
+                    'AOCL': False,
+                    'x64': False
+                }
+                print("Warning: Generated default hardware configuration")
+            return settings
     except FileNotFoundError:
-        print("Warning: Settings file not found, using defaults")
-        time.sleep(3)
-        return {}
+        raise ConfigurationError("Missing persistent.json - run the installer first")
     except json.JSONDecodeError as e:
-        print(f"Error: Settings decode failed - {e}")
-        time.sleep(5)
-        return {}
-
-def load_hardware_config():
-    """Load and validate hardware configuration with fallbacks"""
-    try:
-        with open("data/hardware.json", "r") as f:
-            hw = json.load(f)
-            return {
-                'OpenCL': bool(hw.get('OpenCL', False)),
-                'AVX2': bool(hw.get('AVX2', False)),
-                'AOCL': bool(hw.get('AOCL', False)),
-                'x64': bool(hw.get('x64', False))
-            }
-    except Exception as e:
-        print(f"Error loading hardware config: {e}")
-        return {
-            'OpenCL': False,
-            'AVX2': False,
-            'AOCL': False,
-            'x64': False
-        }
+        raise ConfigurationError(f"Invalid JSON in persistent.json: {str(e)}")
 
 def detect_static_frame(frame1: np.ndarray, frame2: np.ndarray) -> bool:
     """Detect if two consecutive frames are static using histogram comparison."""

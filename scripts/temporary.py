@@ -21,6 +21,22 @@ PROCESSING_CONFIG = {
     'output_codec': 'libx264',
     'audio_codec': 'aac',
     
+    # Hardware Acceleration Preferences
+    'hardware_acceleration': {
+        'use_gpu': True,
+        'use_opencl': True,
+        'use_avx2': True,
+        'opencl_platform_preference': ['NVIDIA', 'AMD', 'Intel']
+    },
+    
+    # Performance Settings
+    'performance': {
+        'gpu_batch_size': 32,
+        'cpu_threads': 4,
+        'frame_buffer_size': 30,
+        'max_parallel_processes': 2
+    },
+    
     # Scene Detection
     'static_threshold': 0.98,
     'menu_threshold': 0.85,
@@ -28,7 +44,6 @@ PROCESSING_CONFIG = {
     'texture_threshold': 0.4,
     'min_scene_duration': 2.0,
     'max_scene_duration': 300.0,
-    'max_speed_factor': 4.0,
     'scene_similarity_threshold': 0.85,
     
     # Frame Processing
@@ -46,12 +61,6 @@ PROCESSING_CONFIG = {
         'target_length': 30,  # minutes
         'resolution_height': 720,
         'preview_height': 360
-    },
-    
-    # Hardware Acceleration
-    'hardware_acceleration': {
-        'use_opencl': True,  # Enable OpenCL by default for motion detection
-        'use_avx2': False    # Disable AVX2 by default unless explicitly supported
     }
 }
 
@@ -81,27 +90,6 @@ MEMORY_CONFIG = {
     'cleanup_interval': 60,  # seconds
     'frame_buffer_size': 30,
     'chunk_size_mb': 64
-}
-
-# Hardware Configuration
-HARDWARE_CONFIG = {
-    # Hardware capabilities (detected)
-    'OpenCL': False,
-    'AVX2': False,
-    'AOCL': False,
-    'x64': False,
-    
-    # User preferences (configurable)
-    'use_gpu': True,
-    'use_opencl': True,
-    'use_avx2': True,
-    
-    # Performance settings
-    'gpu_batch_size': 32,
-    'cpu_threads': 4,
-    
-    # Platform preferences
-    'opencl_platform_preference': ['NVIDIA', 'AMD', 'Intel']
 }
 
 # File System Paths
