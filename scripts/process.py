@@ -1,14 +1,15 @@
 # process.py
 
-# Imports...
-import cv2, time, os
+# Imports
+import cv2
+import time
+import os
 from dataclasses import dataclass
 import numpy as np
 import moviepy.editor as mp
 from typing import Dict, Any, Optional, List, Tuple, Callable, Union
 from queue import Queue
 from threading import Event, Lock
-from typing import List, Tuple
 from scripts.analyze import VideoAnalyzer
 from scripts.exceptions import ProcessingError
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,11 +36,84 @@ from scripts.utility import (
     CoreUtilities,
     detect_static_frame,
     detect_menu_screen,
-    AudioProcessor  # Add this line
+    AudioProcessor
 )
 
-# Classes...
+# SceneProcessor class
+class SceneProcessor:
+    """Handles dynamic scene processing based on scene type."""
+    def __init__(self, config: Dict[str, Any], audio_processor: AudioProcessor):
+        self.config = config
+        self.audio_processor = audio_processor
+
+    def process(self, scene_type: str, clip: mp.VideoFileClip, scene: SceneData) -> mp.VideoFileClip:
+        """Process a scene based on its type."""
+        if scene_type == 'static':
+            return self._process_static(clip)
+        elif scene_type == 'menu':
+            return self._process_menu(clip)
+        elif scene_type == 'action':
+            return clip.copy()
+        else:
+            processed = self._apply_speed_adjustment(clip, scene.speed_factor, scene.transitions)
+            if clip.audio is not None and self.config['enhance_audio']:
+                processed = self._process_audio(processed, scene.speed_factor)
+            return processed
+
+    def _process_static(self, clip: mp.VideoFileClip) -> mp.VideoFileClip:
+        """Process a static scene."""
+        duration = min(1.0, clip.duration)
+        return clip.subclip(0, duration)
+
+    def _process_menu(self, clip: mp.VideoFileClip) -> mp.VideoFileClip:
+        """Process a menu scene."""
+        return self._apply_speed_adjustment(clip, min(4.0, 2.0), [])
+
+    def _apply_speed_adjustment(self, clip: mp.VideoFileClip, speed_factor: float, 
+                                transitions: List[Dict[str, Any]]) -> mp.VideoFileClip:
+        """Apply speed adjustments with transitions."""
+        try:
+            if speed_factor == 1.0:
+                return clip.copy()
+            if clip.duration > 2.0:
+                part1_duration = min(1.0, clip.duration * 0.2)
+                part3_duration = min(1.0, clip.duration * 0.2)
+                part2_duration = clip.duration - part1_duration - part3_duration
+                part1 = self._create_speed_transition(clip.subclip(0, part1_duration), 1.0, speed_factor)
+                part2 = clip.subclip(part1_duration, part1_duration + part2_duration).speedx(speed_factor)
+                part3 = self._create_speed_transition(clip.subclip(clip.duration - part3_duration), speed_factor, 1.0)
+                return mp.concatenate_videoclips([part1, part2, part3])
+            return clip.speedx(speed_factor)
+        except Exception as e:
+            print(f"Error in speed adjustment: {e}")
+            return clip.copy()
+
+    def _process_audio(self, clip: mp.VideoFileClip, speed_factor: float) -> mp.VideoFileClip:
+        from scripts.utility import AudioProcessor
+        if clip.audio is None:
+            return clip
+        audio_processor = AudioProcessor(sample_rate=AUDIO_CONFIG['sample_rate'])
+        audio_array = clip.audio.to_soundarray()
+        processed_audio = audio_processor.process_audio(audio_array, speed_factor)
+        return clip.set_audio(mp.AudioArrayClip(processed_audio, fps=clip.audio.fps))
+
+    def _create_speed_transition(self, clip: mp.VideoFileClip, start_speed: float, 
+                                 end_speed: float) -> mp.VideoFileClip:
+        """Create smooth transition between speeds."""
+        try:
+            n_frames = int(clip.duration * clip.fps)
+            if n_frames < 2:
+                return clip.speedx(end_speed)
+            speeds = np.linspace(start_speed, end_speed, n_frames)
+            frames = [clip.get_frame(i / clip.fps) for i, speed in enumerate(speeds)]
+            return mp.ImageSequenceClip(frames, fps=clip.fps)
+        except Exception as e:
+            print(f"Error in speed transition: {e}")
+            return clip.speedx(end_speed)
+
+# VideoProcessor class
 class VideoProcessor:
+    """Optimized video processing engine."""
     def __init__(self, settings=None, analyzer=None):
         self.core = CoreUtilities()
         self.settings = settings or load_settings()
@@ -55,6 +129,7 @@ class VideoProcessor:
         self.progress = ProgressMonitor()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
+        self.scene_processor = SceneProcessor(self.config, self.audio_processor)
         self.cancel_flag = Event()
         self._lock = Lock()
 
@@ -103,6 +178,8 @@ class VideoProcessor:
         """Analyze video content."""
         self.progress.update_progress(0, "Analyzing video")
         try:
+            if self.analyzer is None:
+                raise ProcessingError("VideoAnalyzer not provided")
             analysis = self.analyzer.analyze_video(input_path, target_duration)
             if not analysis['scenes']:
                 raise ProcessingError("No scenes detected in video")
@@ -154,7 +231,7 @@ class VideoProcessor:
                 scene_clip = clip.subclip(start_time, min(end_time, clip.duration))
 
                 # Process the scene segment with proper audio handling
-                processed_clip = self._process_scene_segment(scene_clip, scene)
+                processed_clip = self.scene_processor.process(scene.scene_type, scene_clip, scene)
                 if processed_clip:
                     processed_scenes.append(processed_clip)
                 else:
@@ -183,143 +260,8 @@ class VideoProcessor:
             print(f"Error: Scene processing failed - {str(e)}")
             return []
         finally:
-            # Ensure clip is closed even on exception
             if 'clip' in locals():
                 clip.close()
-
-    def _process_scene_segment(self, clip: mp.VideoFileClip,
-                              scene: SceneData) -> mp.VideoFileClip:
-        """Process an individual scene segment."""
-        try:
-            # Handle static scenes
-            if scene.scene_type == 'static':
-                return self._process_static_scene(clip)
-
-            # Handle menu scenes
-            if scene.scene_type == 'menu':
-                return self._process_menu_scene(clip)
-
-            # Handle action scenes
-            if scene.scene_type == 'action':
-                return clip.copy()
-
-            # Apply dynamic speed adjustment
-            processed = self._apply_speed_adjustment(
-                clip,
-                scene.speed_factor,
-                scene.transitions
-            )
-
-            # Process audio
-            if clip.audio is not None and self.config.enhance_audio:
-                processed = self._process_audio(processed, scene.speed_factor)
-
-            return processed
-
-        except Exception as e:
-            self.error_handler.handle_error(e, "segment_processing")
-            print(f"Error: Failed to process scene segment - {e}")
-            time.sleep(5)
-            return clip.copy()
-
-    def _process_static_scene(self, clip: mp.VideoFileClip) -> mp.VideoFileClip:
-        """Process a static scene."""
-        duration = min(1.0, clip.duration)
-        return clip.subclip(0, duration)
-
-    def _process_menu_scene(self, clip: mp.VideoFileClip) -> mp.VideoFileClip:
-        """Process a menu scene."""
-        return self._apply_speed_adjustment(clip, min(4.0, 2.0), [])
-
-    def _apply_speed_adjustment(self, clip: mp.VideoFileClip,
-                              speed_factor: float,
-                              transitions: List[Dict[str, Any]]) -> mp.VideoFileClip:
-        """Apply speed adjustments to clip."""
-        try:
-            if speed_factor == 1.0:
-                return clip.copy()
-
-            if clip.duration > 2.0:
-                # Create smooth speed transition
-                part1_duration = min(1.0, clip.duration * 0.2)
-                part3_duration = min(1.0, clip.duration * 0.2)
-                part2_duration = clip.duration - part1_duration - part3_duration
-
-                # Process parts with transitions
-                part1 = self._create_speed_transition(
-                    clip.subclip(0, part1_duration),
-                    1.0,
-                    speed_factor
-                )
-
-                part2 = clip.subclip(
-                    part1_duration,
-                    part1_duration + part2_duration
-                ).speedx(speed_factor)
-
-                part3 = self._create_speed_transition(
-                    clip.subclip(clip.duration - part3_duration),
-                    speed_factor,
-                    1.0
-                )
-
-                return mp.concatenate_videoclips([part1, part2, part3])
-            else:
-                return clip.speedx(speed_factor)
-
-        except Exception as e:
-            self.error_handler.handle_error(e, "speed_adjustment")
-            return clip.copy()
-
-    def _create_speed_transition(self, clip: mp.VideoFileClip,
-                               start_speed: float,
-                               end_speed: float) -> mp.VideoFileClip:
-        """Create smooth transition between speeds."""
-        try:
-            n_frames = int(clip.duration * clip.fps)
-            if n_frames < 2:
-                return clip.speedx(end_speed)
-
-            speeds = np.linspace(start_speed, end_speed, n_frames)
-            frames = []
-
-            for i, speed in enumerate(speeds):
-                time = i / clip.fps
-                frame = clip.get_frame(time)
-                frames.append(frame)
-
-            return mp.ImageSequenceClip(frames, fps=clip.fps)
-
-        except Exception as e:
-            self.error_handler.handle_error(e, "speed_transition")
-            return clip.speedx(end_speed)
-
-
-    def _process_audio(self, clip: mp.VideoFileClip,
-                      speed_factor: float) -> mp.VideoFileClip:
-        """Process audio for the clip."""
-        try:
-            if clip.audio is None:
-                return clip
-
-            # Extract audio data
-            audio_array = clip.audio.to_soundarray()
-            
-            # Process audio
-            processed_audio = self.audio_processor.process_audio(
-                audio_array,
-                speed_factor
-            )
-
-            # Create new audio clip
-            audio_clip = mp.AudioArrayClip(processed_audio, clip.audio.fps)
-            
-            # Set processed audio
-            return clip.set_audio(audio_clip)
-
-        except Exception as e:
-            self.error_handler.handle_error(e, "audio_processing")
-            return clip
 
     def _compile_video(self, scenes: List[mp.VideoFileClip],
                       output_path: str,
@@ -353,42 +295,48 @@ class VideoProcessor:
     def cancel_processing(self) -> None:
         """Cancel current processing operation."""
         self.cancel_flag.set()
-        print("Info: Processing cancelled by user")  # Replaced log_event
+        print("Info: Processing cancelled by user")
         time.sleep(1)
 
     def validate_output(self, output_path: str, target_duration: float) -> bool:
         """Validate the processed video."""
         try:
-            clip = mp.VideoFileClip(output_path)
-            duration = clip.duration
-            clip.close()
+                from scripts.utility import extract_frames_optimized
+                processed_scenes = []
+                total_scenes = len(scenes)
+                frame_gen = extract_frames_optimized(input_path, batch_size=self.config['performance']['frame_buffer_size'])
+                frames = list(frame_gen)  # Collect frames efficiently
+                fps = GLOBAL_STATE.current_video.fps if GLOBAL_STATE.current_video else 30.0
 
-            # Check duration
-            duration_diff = abs(duration - target_duration)
-            if duration_diff > 1800:  # 30 minutes
-                print(f"Warning: Output duration {duration:.1f}s differs from target {target_duration:.1f}s")  # Replaced log_event
-                time.sleep(3)
-                return False
+                update_processing_state(stage="Processing", progress=0, processed_scenes=0, total_scenes=total_scenes)
 
-            # Verify file integrity
-            test_clip = mp.VideoFileClip(output_path)
-            test_clip.get_frame(0)
-            test_clip.get_frame(test_clip.duration - 1/test_clip.fps)
-            test_clip.close()
+                for i, scene in enumerate(scenes):
+                    if self.cancel_flag.is_set():
+                        break
+                    progress = 40 + ((i + 1) / total_scenes * 50)
+                    self.progress.update_progress(progress, f"Processing scene {i+1}/{total_scenes}")
 
-            # Verify file size
-            size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            if size_mb < 1:
-                print(f"Error: Output file too small: {size_mb:.1f}MB")  # Replaced log_event
-                time.sleep(5)
-                return False
+                    start_idx = scene.start_frame
+                    end_idx = min(scene.end_frame, len(frames) - 1)
+                    if start_idx >= len(frames) or end_idx <= start_idx:
+                        continue
 
-            return True
+                    # Create clip from frame subset
+                    scene_frames = frames[start_idx:end_idx + 1]
+                    scene_clip = mp.ImageSequenceClip(scene_frames, fps=fps)
+                    processed_clip = self.scene_processor.process(scene.scene_type, scene_clip, scene)
+                    processed_scenes.append(processed_clip)
 
-        except Exception as e:
-            self.error_handler.handle_error(e, "output_validation")
-            return False
+                    update_processing_state(processed_scenes=len(processed_scenes), progress=progress)
 
+                    if self.memory_manager.check_memory()['warning']:
+                        self.memory_manager.cleanup()
+
+                self.progress.update_progress(90, "Scene processing complete")
+                return processed_scenes
+            except Exception as e:
+                self.error_handler.handle_error(e, "scene_processing")
+                return []
 
     def _create_smooth_transition(self, clip1: mp.VideoFileClip, 
                                 clip2: mp.VideoFileClip,
@@ -428,18 +376,22 @@ class VideoProcessor:
             return mp.concatenate_videoclips([clip1, clip2])
 
 class BatchProcessor:
-    def __init__(self):
-        self.processor = VideoProcessor()
+    def __init__(self, settings=None, analyzer=None):
+        self.processor = VideoProcessor(settings=settings, analyzer=analyzer)
         self.error_handler = ErrorHandler()
         self.queue = Queue()
         self.queue_status = {}
         self.progress_callback = None
         self.active = True
-    
+        self.processing_lock = Lock()
+
     def add_to_queue(self, input_path: str, output_path: str, target_duration: float) -> None:
-        print(f"Info: Added {input_path} to queue")  # Added
-        time.sleep(1)  # Added
-    
+        """Add a file to the processing queue."""
+        print(f"Info: Added {input_path} to queue")
+        self.queue.put((input_path, output_path, target_duration))
+        self.queue_status[input_path] = {'status': 'Pending', 'progress': 0.0}
+        time.sleep(1)
+
     def process_queue(self, progress_callback: Optional[Callable] = None) -> None:
         """Process all files in the queue."""
         self.progress_callback = progress_callback
@@ -451,7 +403,7 @@ class BatchProcessor:
             self._process_parallel(files)
         print("Info: Queue processing complete")
         time.sleep(1)
-    
+
     def get_queue_status(self) -> List[Dict[str, Any]]:
         """Get current status of processing queue."""
         status_list = []
@@ -462,14 +414,14 @@ class BatchProcessor:
                 'progress': info['progress']
             })
         return status_list
-    
+
     def _update_batch_progress(self, file_path: str, progress: float) -> None:
         """Update progress for a specific file in the batch."""
         with self.processing_lock:
             self.queue_status[file_path]['progress'] = progress
             
             total_progress = sum(info['progress'] for info in self.queue_status.values())
-            overall_progress = total_progress / len(self.queue_status)
+            overall_progress = total_progress / len(self.queue_status) if self.queue_status else 0
             
             if self.progress_callback:
                 self.progress_callback(
@@ -477,7 +429,7 @@ class BatchProcessor:
                     overall_progress,
                     f"Completed {self.completed_files}/{self.total_files} files"
                 )
-    
+
     def cancel_processing(self) -> None:
         """Cancel batch processing."""
         self.active = False
@@ -488,91 +440,368 @@ class BatchProcessor:
         print("Info: Batch processing cancelled")
         time.sleep(1)
 
-def _process_parallel(self, files: List[Tuple[str, str, float]]) -> None:
-    """Process multiple files in parallel."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import threading
-    
-    self.processing_lock = threading.Lock()
-    self.completed_files = 0
-    self.total_files = len(files)
-    
-    def process_file(input_path: str, output_path: str, 
-                    target_duration: float) -> bool:
-        try:
-            result = self.processor.process_video(
-                input_path,
-                output_path,
-                target_duration,
-                progress_callback=self._update_batch_progress
-            )
-            
-            with self.processing_lock:
-                self.completed_files += 1
-                self.queue_status[input_path]['status'] = (
-                    'Complete' if result else 'Failed'
+    def _process_parallel(self, files: List[Tuple[str, str, float]]) -> None:
+        """Process multiple files in parallel."""
+        import threading
+        
+        self.completed_files = 0
+        self.total_files = len(files)
+        
+        def process_file(input_path: str, output_path: str, target_duration: float) -> bool:
+            try:
+                result = self.processor.process_video(
+                    input_path,
+                    output_path,
+                    target_duration,
+                    progress_callback=lambda p, msg: self._update_batch_progress(input_path, p)
                 )
-            return result
+                
+                with self.processing_lock:
+                    self.completed_files += 1
+                    self.queue_status[input_path]['status'] = 'Complete' if result else 'Failed'
+                return result
+                
+            except Exception as e:
+                self.error_handler.handle_error(e, "parallel_processing")
+                with self.processing_lock:
+                    self.queue_status[input_path]['status'] = 'Failed'
+                return False
+        
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_file = {
+                executor.submit(
+                    process_file,
+                    input_path,
+                    output_path,
+                    target_duration
+                ): input_path
+                for input_path, output_path, target_duration in files
+            }
+            
+            for future in as_completed(future_to_file):
+                input_path = future_to_file[future]
+                try:
+                    success = future.result()
+                    if not success:
+                        print(f"Error: Failed to process {input_path}")
+                        time.sleep(5)
+                except Exception as e:
+                    self.error_handler.handle_error(e, "batch_monitoring")
+                    print(f"Error: Exception in batch processing {input_path}: {e}")
+
+class PreviewGenerator:
+    def __init__(self, work_dir: Optional[str] = None):
+        self.work_dir = work_dir if work_dir is not None else get_full_path('work')
+        os.makedirs(self.work_dir, exist_ok=True)
+
+    def create_preview(self, input_path: str) -> str:
+        """
+        Create a 360p preview of the video using ffmpeg.
+
+        Args:
+            input_path: Path to the input video.
+
+        Returns:
+            str: Path to the preview video if successful, otherwise an empty string.
+        """
+        preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
+        command = f'ffmpeg -i "{input_path}" -vf "scale=-1:360" -c:v libx264 -crf 23 -c:a aac -y "{preview_path}"'
+
+        try:
+            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode == 0:
+                return preview_path
+            else:
+                print(f"ffmpeg failed with return code {result.returncode}")
+                return ""
+        except subprocess.CalledProcessError as e:
+            print(f"Error creating preview: {e}")
+            return ""
+
+    def generate_thumbnails(self, video_path: str, num_thumbnails: int = 5) -> List[str]:
+        """Generate thumbnails from video for preview."""
+        try:
+            import moviepy.editor as mp
+            clip = mp.VideoFileClip(video_path)
+            duration = clip.duration
+            interval = duration / (num_thumbnails + 1)
+            
+            thumbnails = []
+            for i in range(num_thumbnails):
+                time = interval * (i + 1)
+                frame = clip.get_frame(time)
+                
+                # Save thumbnail
+                thumb_path = os.path.join(
+                    self.work_dir,
+                    f"thumb_{i}_{os.path.basename(video_path)}.jpg"
+                )
+                cv2.imwrite(thumb_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                thumbnails.append(thumb_path)
+            
+            clip.close()
+            return thumbnails
             
         except Exception as e:
-            self.error_handler.handle_error(e, "parallel_processing")
-            return False
-    
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_file = {
-            executor.submit(
-                process_file,
-                input_path,
-                output_path,
-                target_duration
-            ): input_path
-            for input_path, output_path, target_duration in files
+            print(f"Error: Thumbnail generation failed - {e}")
+            time.sleep(5)
+
+class SceneManager:
+    def __init__(self, scene_config):
+        self.scene_settings = scene_config
+        self.min_scene_length = scene_config['min_scene_length']
+        self.max_scene_length = scene_config['max_scene_length']
+        self.threshold = scene_config['scene_threshold']
+        self._lock = Lock()
+        self.metrics = MetricsCollector()
+
+    def detect_scenes(self, frames: List[np.ndarray],
+                     audio_segments: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+        """Detect and analyze scenes combining visual and audio information."""
+        with self._lock:
+            scenes = []
+            current_scene = None
+            
+            for i in range(1, len(frames)):
+                if self.is_scene_change(frames[i-1], frames[i]):
+                    if current_scene:
+                        scenes.append(self.finalize_scene(current_scene, frames, i-1))
+                    current_scene = self.initialize_scene(i)
+                
+                if current_scene:
+                    current_scene = self.update_scene(current_scene, frames[i], i)
+                
+                if (current_scene and 
+                    i - current_scene['start_frame'] > self.max_scene_length * 30):
+                    scenes.append(self.finalize_scene(current_scene, frames, i))
+                    current_scene = self.initialize_scene(i + 1)
+            
+            if current_scene:
+                scenes.append(self.finalize_scene(current_scene, frames, len(frames)-1))
+            
+            scenes = self.merge_short_scenes(scenes)
+            scenes = self.merge_audio_info(scenes, audio_segments, len(frames))
+            
+            return scenes
+
+    def is_scene_change(self, frame1: np.ndarray, frame2: np.ndarray) -> bool:
+        """Detect if there is a scene change between frames."""
+        try:
+            hist1 = cv2.calcHist([frame1], [0, 1, 2], None, [8, 8, 8],
+                               [0, 256, 0, 256, 0, 256])
+            hist2 = cv2.calcHist([frame2], [0, 1, 2], None, [8, 8, 8],
+                               [0, 256, 0, 256, 0, 256])
+            diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
+            
+            frame_diff = cv2.absdiff(frame1, frame2)
+            diff_score = np.mean(frame_diff)
+            
+            return diff > self.threshold or diff_score > 30.0
+        except Exception as e:
+            print(f"Error: Scene change detection failed - {e}")
+            time.sleep(5)
+
+    def initialize_scene(self, start_frame: int) -> Dict[str, Any]:
+        return {
+            'start_frame': start_frame,
+            'end_frame': None,
+            'is_action': False,
+            'is_menu': False,
+            'is_static': False,
+            'motion_score': 0.0,
+            'audio_activity': 0.0,
+            'frame_count': 0,
+            'complexity': 0.0,
+            'transitions': [],
+            'prev_frame': None  # Add prev_frame
+        }
+
+    def _process_scene_segment(self, clip: mp.VideoFileClip, scene: SceneData) -> mp.VideoFileClip:
+        try:
+            if scene.scene_type == 'static':
+                return self._process_static_scene(clip)
+            if scene.scene_type == 'menu':
+                return self._process_menu_scene(clip)
+            if scene.scene_type == 'action':
+                return clip.copy()
+
+            # Apply speed adjustment to video only
+            processed_video = self._apply_speed_adjustment(clip, scene.speed_factor, scene.transitions)
+
+            # Process audio if present
+            if clip.audio is not None and self.config['enhance_audio']:
+                original_audio = clip.audio.to_soundarray()
+                new_duration = processed_video.duration
+                original_duration = clip.duration
+                rate = original_duration / new_duration if new_duration > 0 else 1.0
+
+                processed_audio = self.audio_processor.process_audio(original_audio, rate)
+                audio_clip = mp.AudioArrayClip(processed_audio, fps=clip.audio.fps)
+                processed = processed_video.set_audio(audio_clip)
+            else:
+                processed = processed_video
+
+            return processed
+        except Exception as e:
+            self.error_handler.handle_error(e, "segment_processing")
+            print(f"Error: Failed to process scene segment - {e}")
+            time.sleep(5)
+            return clip.copy()
+
+    def _calculate_scene_complexity(self, frame: np.ndarray, current_complexity: float,
+                                  frame_count: int) -> float:
+        """Calculate scene complexity based on various metrics."""
+        try:
+            # Convert to grayscale
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Calculate edge density
+            edges = cv2.Canny(gray, 100, 200)
+            edge_density = np.count_nonzero(edges) / edges.size
+            
+            # Calculate texture complexity
+            texture_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+            
+            # Calculate color variety
+            color_score = np.std(frame.reshape(-1, 3), axis=0).mean()
+            
+            # Combine metrics
+            complexity = (0.4 * edge_density + 
+                        0.3 * (texture_score / 1000) +  # Normalize texture score
+                        0.3 * (color_score / 255))      # Normalize color score
+            
+            # Update running average
+            if frame_count == 1:
+                return complexity
+            else:
+                return (current_complexity * (frame_count - 1) + complexity) / frame_count
+                
+        except Exception as e:
+            print(f"Error: Scene complexity calculation failed - {e}")
+            time.sleep(5)
+
+
+    def finalize_scene(self, scene: Dict[str, Any], frames: List[np.ndarray],
+                      end_frame: int) -> Dict[str, Any]:
+        """Finalize scene data and analysis."""
+        scene['end_frame'] = end_frame
+        scene['is_static'] = all(
+            detect_static_frame(frames[i], frames[i+1])
+            for i in range(scene['start_frame'], end_frame-1)
+        )
+        
+        # Calculate final metrics
+        scene['duration'] = (end_frame - scene['start_frame']) / 30  # Assuming 30fps
+        scene['average_motion'] = scene['motion_score']
+        
+        # Detect transitions
+        scene['transitions'] = self._detect_transitions(
+            frames[scene['start_frame']:end_frame+1]
+        )
+        
+        return scene
+
+    def _detect_transitions(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
+        """Detect scene transitions between frames."""
+        transitions = []
+        for i in range(1, len(frames) - 1):
+            try:
+                # Check frame consistency
+                if frames[i].shape != frames[i-1].shape or frames[i].shape != frames[i+1].shape:
+                    print(f"Warning: Frame shape mismatch at index {i}")
+                    time.sleep(3)
+                    continue
+
+                diff_prev = cv2.absdiff(frames[i], frames[i-1])
+                diff_next = cv2.absdiff(frames[i], frames[i+1])
+                mean_diff_prev = np.mean(diff_prev)
+                mean_diff_next = np.mean(diff_next)
+
+                if mean_diff_prev < 5 and mean_diff_next > 30:
+                    transitions.append({'frame': i, 'type': 'cut', 'confidence': 0.9})
+                elif mean_diff_prev < mean_diff_next:
+                    transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
+            except Exception as e:  # Single except block for all exceptions
+                print(f"Warning: Transition detection error - {e}")
+                time.sleep(3)
+        return transitions
+
+    def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge scenes that are too short."""
+        if not scenes:
+            return scenes
+            
+        merged = []
+        current = scenes[0]
+        
+        for next_scene in scenes[1:]:
+            if (next_scene['start_frame'] - current['end_frame'] < 
+                self.min_scene_length * 30):
+                # Merge scenes
+                current['end_frame'] = next_scene['end_frame']
+                current['frame_count'] += next_scene['frame_count']
+                current['motion_score'] = (
+                    (current['motion_score'] * current['frame_count'] +
+                     next_scene['motion_score'] * next_scene['frame_count']) /
+                    (current['frame_count'] + next_scene['frame_count'])
+                )
+                current['is_action'] |= next_scene['is_action']
+                current['is_menu'] |= next_scene['is_menu']
+                current['is_static'] &= next_scene['is_static']
+                current['complexity'] = (current['complexity'] + next_scene['complexity']) / 2
+                current['transitions'].extend(next_scene['transitions'])
+            else:
+                merged.append(current)
+                current = next_scene
+        
+        merged.append(current)
+        return merged
+
+    def merge_audio_info(self, scenes: List[Dict[str, Any]],
+                        audio_segments: List[Tuple[float, float]],
+                        total_frames: int) -> List[Dict[str, Any]]:
+        """Merge audio activity information into scene data."""
+        for scene in scenes:
+            start_time = scene['start_frame'] / total_frames
+            end_time = scene['end_frame'] / total_frames
+            
+            # Calculate overlap with audio segments
+            overlap = 0.0
+            for a_start, a_end in audio_segments:
+                if a_start < end_time and a_end > start_time:
+                    overlap_start = max(start_time, a_start)
+                    overlap_end = min(end_time, a_end)
+                    overlap += overlap_end - overlap_start
+            
+            scene['audio_activity'] = overlap / (end_time - start_time)
+            scene['is_action'] = (
+                scene['audio_activity'] > 0.3 or
+                scene['motion_score'] > 0.5
+            )
+            
+            # Update scene importance based on audio
+            scene['importance_score'] = self._calculate_importance(scene)
+        
+        return scenes
+
+    def _calculate_importance(self, scene: Dict[str, Any]) -> float:
+        """Calculate scene importance based on various factors."""
+        weights = {
+            'motion': 0.3,
+            'audio': 0.3,
+            'complexity': 0.2,
+            'duration': 0.2
         }
         
-        for future in as_completed(future_to_file):
-            input_path = future_to_file[future]
-            try:
-                success = future.result()
-                if not success:
-                    print(f"Error: Failed to process {input_path}")
-                    time.sleep(5)
-            except Exception as e:
-                self.error_handler.handle_error(e, "batch_monitoring")
-
-        def get_queue_status(self) -> List[Dict[str, Any]]:
-            """Get current status of processing queue."""
-            status_list = []
-            for file_path, info in self.queue_status.items():
-                status_list.append({
-                    'name': os.path.basename(file_path),
-                    'status': info['status'],
-                    'progress': info['progress']
-                })
-            return status_list
-
-        def _update_batch_progress(self, file_path: str, progress: float) -> None:
-            """Update progress for a specific file in the batch."""
-            with self.processing_lock:
-                self.queue_status[file_path]['progress'] = progress
-                
-                # Calculate overall progress
-                total_progress = sum(
-                    info['progress'] for info in self.queue_status.values()
-                )
-                overall_progress = total_progress / len(self.queue_status)
-                
-                if self.progress_callback:
-                    self.progress_callback(
-                        'Batch Processing',
-                        overall_progress,
-                        f"Completed {self.completed_files}/{self.total_files} files"
-                    )
-
-        def cancel_processing(self) -> None:
-            """Cancel batch processing."""
-            self.active = False
-            self.processor.cancel_processing()
-            while not self.queue.empty():
-                self.queue.get()
-                self.queue.task_done()
-                
+        # Normalize duration score (prefer scenes between 2-10 seconds)
+        duration_score = 1.0 - abs(scene['duration'] - 6) / 6
+        duration_score = max(0, min(1, duration_score))
+        
+        scores = {
+            'motion': scene['motion_score'],
+            'audio': scene['audio_activity'],
+            'complexity': scene['complexity'],
+            'duration': duration_score
+        }
+        
+        return sum(weights[k] * scores[k] for k in weights)

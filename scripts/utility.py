@@ -15,30 +15,6 @@ from scripts.temporary import (
     MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, BASE_DIR, get_full_path
 )
 
-# OpenCL setup (global for reuse)
-platform = None
-device = None
-context = None
-queue = None
-prg = None
-try:
-    platforms = cl.get_platforms()
-    if platforms:
-        platform = platforms[0]
-        devices = platform.get_devices()
-        if devices:
-            device = devices[0]
-            context = cl.Context([device])
-            queue = cl.CommandQueue(context)
-            print("Info: OpenCL setup successful")
-        else:
-            print("Warning: No OpenCL devices found. Falling back to CPU processing.")
-    else:
-        print("Warning: No OpenCL platforms available. Falling back to CPU processing.")
-except Exception as e:
-    print(f"Warning: OpenCL setup failed - {e}. Falling back to CPU processing.")
-    time.sleep(3)
-
 # OpenCL kernel for frame difference
 kernel_code = """
 __kernel void frame_diff(__global const uchar *frame1, __global const uchar *frame2,
@@ -53,15 +29,6 @@ __kernel void frame_diff(__global const uchar *frame1, __global const uchar *fra
 """
 prg = cl.Program(context, kernel_code).build()
 
-# Dataclasses
-@dataclass
-class SceneData:
-    start_frame: int          # Starting frame of the scene
-    end_frame: int            # Ending frame of the scene
-    scene_type: str           # Type of scene (e.g., 'static', 'menu', 'action')
-    speed_factor: float       # Speed adjustment factor for the scene
-    transitions: list         # List of transitions (could be strings or objects)
-
 # Classes...
 class CoreUtilities:
     def __init__(self):
@@ -70,126 +37,113 @@ class CoreUtilities:
         self.error_handler = ErrorHandler()
 
 class MemoryManager:
-    """Manage memory usage and cleanup."""
-    
     def __init__(self):
-        self.max_memory_usage = MEMORY_CONFIG['max_memory_usage']
-        self.warning_threshold = MEMORY_CONFIG['warning_threshold']
-        self.critical_threshold = MEMORY_CONFIG['critical_threshold']
-        self._last_cleanup = 0
-        self.cleanup_interval = MEMORY_CONFIG['cleanup_interval']
-
-    def check_memory(self) -> Dict[str, Union[bool, float]]:
-        try:
-            process = psutil.Process()
-            memory_percent = process.memory_percent()
-            system_memory = psutil.virtual_memory()
-            
-            status = {
-                'safe': memory_percent <= (self.max_memory_usage * 100),
-                'warning': memory_percent > (self.warning_threshold * 100),
-                'critical': memory_percent > (self.critical_threshold * 100),
-                'usage_percent': memory_percent,
-                'available_gb': system_memory.available / (1024**3)
-            }
-            
-            if status['warning']:
-                print(f"Warning: High memory usage: {memory_percent:.1f}%")
-                time.sleep(3)
-        except Exception as e:
-            print(f"Error: Checking memory failed - {e}")
-            time.sleep(5)
-
-    def cleanup(self, force: bool = False) -> bool:
-        """Perform memory cleanup if needed or forced."""
-        current_time = time.time()
-        if force or (current_time - self._last_cleanup) > self.cleanup_interval:
+        self.tracked_objects = []
+        self.cleanup_interval = ConfigManager.get('memory', 'cleanup_interval', 60)
+        self.max_usage = ConfigManager.get('memory', 'max_memory_usage')
+        self.warning_thresh = ConfigManager.get('memory', 'warning_threshold')
+        
+    def track(self, obj):
+        """REPLACES manual memory tracking"""
+        self.tracked_objects.append(weakref.ref(obj))
+        
+    def auto_cleanup(self, func):
+        """DECORATOR for automatic cleanup"""
+        def wrapper(*args, **kwargs):
             try:
-                # Clear Python's internal cache
-                gc.collect()
-                
-                # Clear OpenCV cache
-                cv2.destroyAllWindows()
-                
-                # Reset last cleanup time
-                self._last_cleanup = current_time
-                
-                print("Info: Memory cleanup performed")
-                time.sleep(1)
-            except Exception as e:
-                print(f"Error: Memory cleanup error - {e}")
-                time.sleep(5)
-
-    def optimize_for_large_file(self, file_size: int) -> Dict[str, Any]:
-        """Configure memory management for large files."""
-        available_mem = psutil.virtual_memory().available
-        chunk_size = min(file_size // 10, available_mem // 4)
-        
-        config = {
-            'chunk_size': chunk_size,
-            'max_chunks': max(1, available_mem // (chunk_size * 2)),
-            'buffer_size': min(64 * 1024 * 1024, chunk_size // 10),
-            'use_temp_files': file_size > available_mem // 2
-        }
-        
-        print(f"Info: Memory config: chunk_size={chunk_size/1024/1024:.1f}MB, max_chunks={config['max_chunks']}, use_temp={config['use_temp_files']}")
-        time.sleep(1)
-        
-        return config
-
-    def recover_from_error(self, error_type: str) -> bool:
-        """Attempt to recover from memory-related errors."""
-        if error_type == "MemoryError":
-            try:
-                # Force aggressive cleanup
+                result = func(*args, **kwargs)
+            finally:
                 self.cleanup(force=True)
-                
-                # Disable OpenCV optimizations
-                cv2.ocl.setUseOpenCL(False)
-                
-                # Clear OpenCV cache
-                cv2.destroyAllWindows()
-                
-                # Clear moviepy cache
-                if hasattr(mp.VideoFileClip, 'clear_cache'):
-                    mp.VideoFileClip.clear_cache()
-                
-                # Request garbage collection
-                gc.collect()
-                
-                print("Info: Memory recovery performed")
-                time.sleep(1)
-                return True
-                
-            except Exception as e:
-                self.error_handler.handle_error(e, "memory_recovery")
-                return False
-                
-        return False
+            return result
+        return wrapper
+    
+    def managed_array(self, shape, dtype):
+        """REPLACES direct numpy array creation"""
+        arr = np.empty(shape, dtype)
+        self.track(arr)
+        return arr
 
-    def monitor_usage(self, threshold_mb: float = 1000.0,
-                     interval_seconds: float = 1.0) -> None:
-        """Monitor memory usage over time."""
-        import threading
+    def check_memory(self) -> Dict[str, Any]:
+        """Check current memory usage against thresholds"""
+        process = psutil.Process()
+        usage = process.memory_info().rss
+        return {
+            "usage": usage,
+            "warning": usage > self.warning_thresh,
+            "critical": usage > self.max_usage
+        }
+
+    def cleanup(self, force: bool = False) -> None:
+        """Perform memory cleanup of tracked objects"""
+        current_usage = self.check_memory()
         
-        def _monitor():
-            while not self.stop_monitoring.is_set():
-                try:
-                    usage = self.check_memory()
-                    if usage['warning'] or usage['critical']:
-                        print(f"{'Warning' if usage['warning'] else 'Error'}: High memory usage: {usage['usage_percent']:.1f}%")
-                        time.sleep(3 if usage['warning'] else 5)
-                        if usage['critical']:
-                            self.cleanup(force=True)
-                    time.sleep(interval_seconds)
-                except Exception as e:
-                    self.error_handler.handle_error(e, "memory_monitoring")
-                    break
+        if force or current_usage["warning"]:
+            self.tracked_objects = [
+                ref for ref in self.tracked_objects
+                if ref() is not None  # Only keep alive objects
+            ]
+            gc.collect()
+
+class SceneDetector:
+    def __init__(self, hardware_ctx: dict):
+        self.motion_detector = self._init_detector(hardware_ctx)
+        self.texture_threshold = ConfigManager.get('processing', 'scene_detection.texture_threshold')
+        self.motion_threshold = ConfigManager.get('processing', 'scene_detection.motion_threshold')
+        self.min_duration = ConfigManager.get('processing', 'scene_detection.min_scene_duration') * 30  # FPS assumption
+    
+    def _init_detector(self, ctx):
+        if ctx['use_opencl']:
+            return detect_motion_opencl
+        elif ctx['use_avx2']:
+            # Placeholder for AVX2 detector if implemented
+            return detect_motion_cpu
+        return detect_motion_cpu
+    
+    def detect_scenes(self, frames: List[np.ndarray], audio_segments: List[Tuple[float, float]]) -> List[SceneData]:
+        scenes = []
+        current_start = 0
         
-        self.stop_monitoring = threading.Event()
-        self.monitor_thread = threading.Thread(target=_monitor)
-        self.monitor_thread.daemon = True
-        self.monitor_thread.start()
+        for i in range(1, len(frames)):
+            if self._is_scene_change(frames[i-1], frames[i]) and (i - current_start) >= self.min_duration:
+                scenes.append(SceneData(
+                    start_frame=current_start,
+                    end_frame=i-1,
+                    scene_type='gameplay',  # Default, refined later
+                    motion_score=self.motion_detector(frames[i-1], frames[i], self.motion_threshold)
+                ))
+                current_start = i
+        
+        if current_start < len(frames):
+            scenes.append(SceneData(start_frame=current_start, end_frame=len(frames)-1, scene_type='gameplay'))
+        
+        # Integrate audio and refine scene types
+        for scene in scenes:
+            scene.audio_activity = self._calculate_audio_activity(scene, audio_segments, len(frames))
+            scene.scene_type = self._determine_scene_type(scene, frames[scene.start_frame:scene.end_frame + 1])
+        
+        return scenes
+    
+    def _is_scene_change(self, frame1, frame2):
+        motion = self.motion_detector(frame1, frame2, self.motion_threshold)
+        texture_diff = detect_texture_change(frame1, frame2, self.texture_threshold)
+        return motion or texture_diff
+    
+    def _calculate_audio_activity(self, scene, audio_segments, total_frames):
+        start_time = scene.start_frame / total_frames
+        end_time = scene.end_frame / total_frames
+        overlap = sum(max(0, min(end_time, a_end) - max(start_time, a_start)) 
+                     for a_start, a_end in audio_segments)
+        return overlap / (end_time - start_time) if end_time > start_time else 0
+    
+    def _determine_scene_type(self, scene, scene_frames):
+        if all(detect_static_frame(scene_frames[i], scene_frames[i+1]) 
+               for i in range(len(scene_frames)-1)):
+            return 'static'
+        elif detect_menu_screen(scene_frames[len(scene_frames)//2]):
+            return 'menu'
+        elif scene.motion_score > 0.5 or scene.audio_activity > 0.3:
+            return 'action'
+        return 'gameplay'
 
 class ProgressMonitor:
     """Monitor and report processing progress."""
@@ -203,8 +157,7 @@ class ProgressMonitor:
         self._lock = Lock()
 
     def register_callback(self, callback: Callable[[str, float, str], None]) -> None:
-        """Register a progress callback function."""
-        self.callbacks.append(callback)
+            self.callbacks.append(callback)
 
     def start_stage(self, stage: str, weight: float = 1.0) -> None:
         """Start a new processing stage."""
@@ -220,17 +173,16 @@ class ProgressMonitor:
             self._notify_progress(stage, 0.0, f"Starting {stage}")
 
     def update_progress(self, progress: float, message: str = "") -> None:
-        """Update progress for current stage."""
-        if not self.current_stage:
-            return
-            
-        with self._lock:
-            for stage in self.stages:
-                if stage['name'] == self.current_stage:
-                    stage['progress'] = progress
-                    break
-            
-            self._notify_progress(self.current_stage, progress, message)
+            if not self.current_stage:
+                return
+            with self._lock:
+                for stage in self.stages:
+                    if stage['name'] == self.current_stage:
+                        stage['progress'] = progress
+                        break
+                overall_progress = self.get_overall_progress()
+                update_processing_state(stage=self.current_stage, progress=overall_progress)
+                self._notify_progress(self.current_stage, progress, message)
 
     def complete_stage(self, stage: str) -> None:
         """Mark a stage as complete."""
@@ -423,323 +375,6 @@ class AudioProcessor:
             time.sleep(5)
             return audio
 
-class SceneManager:
-    def __init__(self, scene_config):
-        self.scene_settings = scene_config
-        self.min_scene_length = scene_config['min_scene_length']
-        self.max_scene_length = scene_config['max_scene_length']
-        self.threshold = scene_config['scene_threshold']
-        self._lock = Lock()
-        self.metrics = MetricsCollector()
-
-    def detect_scenes(self, frames: List[np.ndarray],
-                     audio_segments: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
-        """Detect and analyze scenes combining visual and audio information."""
-        with self._lock:
-            scenes = []
-            current_scene = None
-            
-            for i in range(1, len(frames)):
-                if self.is_scene_change(frames[i-1], frames[i]):
-                    if current_scene:
-                        scenes.append(self.finalize_scene(current_scene, frames, i-1))
-                    current_scene = self.initialize_scene(i)
-                
-                if current_scene:
-                    current_scene = self.update_scene(current_scene, frames[i], i)
-                
-                if (current_scene and 
-                    i - current_scene['start_frame'] > self.max_scene_length * 30):
-                    scenes.append(self.finalize_scene(current_scene, frames, i))
-                    current_scene = self.initialize_scene(i + 1)
-            
-            if current_scene:
-                scenes.append(self.finalize_scene(current_scene, frames, len(frames)-1))
-            
-            scenes = self.merge_short_scenes(scenes)
-            scenes = self.merge_audio_info(scenes, audio_segments, len(frames))
-            
-            return scenes
-
-    def is_scene_change(self, frame1: np.ndarray, frame2: np.ndarray) -> bool:
-        """Detect if there is a scene change between frames."""
-        try:
-            hist1 = cv2.calcHist([frame1], [0, 1, 2], None, [8, 8, 8],
-                               [0, 256, 0, 256, 0, 256])
-            hist2 = cv2.calcHist([frame2], [0, 1, 2], None, [8, 8, 8],
-                               [0, 256, 0, 256, 0, 256])
-            diff = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CHISQR)
-            
-            frame_diff = cv2.absdiff(frame1, frame2)
-            diff_score = np.mean(frame_diff)
-            
-            return diff > self.threshold or diff_score > 30.0
-        except Exception as e:
-            print(f"Error: Scene change detection failed - {e}")
-            time.sleep(5)
-
-    def initialize_scene(self, start_frame: int) -> Dict[str, Any]:
-        return {
-            'start_frame': start_frame,
-            'end_frame': None,
-            'is_action': False,
-            'is_menu': False,
-            'is_static': False,
-            'motion_score': 0.0,
-            'audio_activity': 0.0,
-            'frame_count': 0,
-            'complexity': 0.0,
-            'transitions': [],
-            'prev_frame': None  # Add prev_frame
-        }
-
-    def _process_scene_segment(self, clip: mp.VideoFileClip, scene: SceneData) -> mp.VideoFileClip:
-        try:
-            if scene.scene_type == 'static':
-                return self._process_static_scene(clip)
-            if scene.scene_type == 'menu':
-                return self._process_menu_scene(clip)
-            if scene.scene_type == 'action':
-                return clip.copy()
-
-            # Apply speed adjustment to video only
-            processed_video = self._apply_speed_adjustment(clip, scene.speed_factor, scene.transitions)
-
-            # Process audio if present
-            if clip.audio is not None and self.config['enhance_audio']:
-                original_audio = clip.audio.to_soundarray()
-                new_duration = processed_video.duration
-                original_duration = clip.duration
-                rate = original_duration / new_duration if new_duration > 0 else 1.0
-
-                processed_audio = self.audio_processor.process_audio(original_audio, rate)
-                audio_clip = mp.AudioArrayClip(processed_audio, fps=clip.audio.fps)
-                processed = processed_video.set_audio(audio_clip)
-            else:
-                processed = processed_video
-
-            return processed
-        except Exception as e:
-            self.error_handler.handle_error(e, "segment_processing")
-            print(f"Error: Failed to process scene segment - {e}")
-            time.sleep(5)
-            return clip.copy()
-
-    def _calculate_scene_complexity(self, frame: np.ndarray, current_complexity: float,
-                                  frame_count: int) -> float:
-        """Calculate scene complexity based on various metrics."""
-        try:
-            # Convert to grayscale
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Calculate edge density
-            edges = cv2.Canny(gray, 100, 200)
-            edge_density = np.count_nonzero(edges) / edges.size
-            
-            # Calculate texture complexity
-            texture_score = cv2.Laplacian(gray, cv2.CV_64F).var()
-            
-            # Calculate color variety
-            color_score = np.std(frame.reshape(-1, 3), axis=0).mean()
-            
-            # Combine metrics
-            complexity = (0.4 * edge_density + 
-                        0.3 * (texture_score / 1000) +  # Normalize texture score
-                        0.3 * (color_score / 255))      # Normalize color score
-            
-            # Update running average
-            if frame_count == 1:
-                return complexity
-            else:
-                return (current_complexity * (frame_count - 1) + complexity) / frame_count
-                
-        except Exception as e:
-            print(f"Error: Scene complexity calculation failed - {e}")
-            time.sleep(5)
-
-
-    def finalize_scene(self, scene: Dict[str, Any], frames: List[np.ndarray],
-                      end_frame: int) -> Dict[str, Any]:
-        """Finalize scene data and analysis."""
-        scene['end_frame'] = end_frame
-        scene['is_static'] = all(
-            detect_static_frame(frames[i], frames[i+1])
-            for i in range(scene['start_frame'], end_frame-1)
-        )
-        
-        # Calculate final metrics
-        scene['duration'] = (end_frame - scene['start_frame']) / 30  # Assuming 30fps
-        scene['average_motion'] = scene['motion_score']
-        
-        # Detect transitions
-        scene['transitions'] = self._detect_transitions(
-            frames[scene['start_frame']:end_frame+1]
-        )
-        
-        return scene
-
-    def _detect_transitions(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-        """Detect scene transitions between frames."""
-        transitions = []
-        for i in range(1, len(frames) - 1):
-            try:
-                # Check frame consistency
-                if frames[i].shape != frames[i-1].shape or frames[i].shape != frames[i+1].shape:
-                    print(f"Warning: Frame shape mismatch at index {i}")
-                    time.sleep(3)
-                    continue
-
-                diff_prev = cv2.absdiff(frames[i], frames[i-1])
-                diff_next = cv2.absdiff(frames[i], frames[i+1])
-                mean_diff_prev = np.mean(diff_prev)
-                mean_diff_next = np.mean(diff_next)
-
-                if mean_diff_prev < 5 and mean_diff_next > 30:
-                    transitions.append({'frame': i, 'type': 'cut', 'confidence': 0.9})
-                elif mean_diff_prev < mean_diff_next:
-                    transitions.append({'frame': i, 'type': 'fade', 'confidence': 0.7})
-            except Exception as e:  # Single except block for all exceptions
-                print(f"Warning: Transition detection error - {e}")
-                time.sleep(3)
-        return transitions
-
-    def merge_short_scenes(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Merge scenes that are too short."""
-        if not scenes:
-            return scenes
-            
-        merged = []
-        current = scenes[0]
-        
-        for next_scene in scenes[1:]:
-            if (next_scene['start_frame'] - current['end_frame'] < 
-                self.min_scene_length * 30):
-                # Merge scenes
-                current['end_frame'] = next_scene['end_frame']
-                current['frame_count'] += next_scene['frame_count']
-                current['motion_score'] = (
-                    (current['motion_score'] * current['frame_count'] +
-                     next_scene['motion_score'] * next_scene['frame_count']) /
-                    (current['frame_count'] + next_scene['frame_count'])
-                )
-                current['is_action'] |= next_scene['is_action']
-                current['is_menu'] |= next_scene['is_menu']
-                current['is_static'] &= next_scene['is_static']
-                current['complexity'] = (current['complexity'] + next_scene['complexity']) / 2
-                current['transitions'].extend(next_scene['transitions'])
-            else:
-                merged.append(current)
-                current = next_scene
-        
-        merged.append(current)
-        return merged
-
-    def merge_audio_info(self, scenes: List[Dict[str, Any]],
-                        audio_segments: List[Tuple[float, float]],
-                        total_frames: int) -> List[Dict[str, Any]]:
-        """Merge audio activity information into scene data."""
-        for scene in scenes:
-            start_time = scene['start_frame'] / total_frames
-            end_time = scene['end_frame'] / total_frames
-            
-            # Calculate overlap with audio segments
-            overlap = 0.0
-            for a_start, a_end in audio_segments:
-                if a_start < end_time and a_end > start_time:
-                    overlap_start = max(start_time, a_start)
-                    overlap_end = min(end_time, a_end)
-                    overlap += overlap_end - overlap_start
-            
-            scene['audio_activity'] = overlap / (end_time - start_time)
-            scene['is_action'] = (
-                scene['audio_activity'] > 0.3 or
-                scene['motion_score'] > 0.5
-            )
-            
-            # Update scene importance based on audio
-            scene['importance_score'] = self._calculate_importance(scene)
-        
-        return scenes
-
-    def _calculate_importance(self, scene: Dict[str, Any]) -> float:
-        """Calculate scene importance based on various factors."""
-        weights = {
-            'motion': 0.3,
-            'audio': 0.3,
-            'complexity': 0.2,
-            'duration': 0.2
-        }
-        
-        # Normalize duration score (prefer scenes between 2-10 seconds)
-        duration_score = 1.0 - abs(scene['duration'] - 6) / 6
-        duration_score = max(0, min(1, duration_score))
-        
-        scores = {
-            'motion': scene['motion_score'],
-            'audio': scene['audio_activity'],
-            'complexity': scene['complexity'],
-            'duration': duration_score
-        }
-        
-        return sum(weights[k] * scores[k] for k in weights)
-
-class PreviewGenerator:
-    def __init__(self, work_dir: Optional[str] = None):
-        self.work_dir = work_dir if work_dir is not None else get_full_path('work')
-        os.makedirs(self.work_dir, exist_ok=True)
-
-    def create_preview(self, input_path: str) -> str:
-        """
-        Create a 360p preview of the video using ffmpeg.
-
-        Args:
-            input_path: Path to the input video.
-
-        Returns:
-            str: Path to the preview video if successful, otherwise an empty string.
-        """
-        preview_path = os.path.join(self.work_dir, f"preview_{os.path.basename(input_path)}")
-        command = f'ffmpeg -i "{input_path}" -vf "scale=-1:360" -c:v libx264 -crf 23 -c:a aac -y "{preview_path}"'
-
-        try:
-            result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if result.returncode == 0:
-                return preview_path
-            else:
-                print(f"ffmpeg failed with return code {result.returncode}")
-                return ""
-        except subprocess.CalledProcessError as e:
-            print(f"Error creating preview: {e}")
-            return ""
-
-    def generate_thumbnails(self, video_path: str, num_thumbnails: int = 5) -> List[str]:
-        """Generate thumbnails from video for preview."""
-        try:
-            import moviepy.editor as mp
-            clip = mp.VideoFileClip(video_path)
-            duration = clip.duration
-            interval = duration / (num_thumbnails + 1)
-            
-            thumbnails = []
-            for i in range(num_thumbnails):
-                time = interval * (i + 1)
-                frame = clip.get_frame(time)
-                
-                # Save thumbnail
-                thumb_path = os.path.join(
-                    self.work_dir,
-                    f"thumb_{i}_{os.path.basename(video_path)}.jpg"
-                )
-                cv2.imwrite(thumb_path, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                thumbnails.append(thumb_path)
-            
-            clip.close()
-            return thumbnails
-            
-        except Exception as e:
-            print(f"Error: Thumbnail generation failed - {e}")
-            time.sleep(5)
-
 class MetricsCollector:
     """Collect and track processing metrics."""
     
@@ -871,123 +506,7 @@ def cleanup_work_directory() -> None:
     work_dir = get_full_path('work')
     shutil.rmtree(work_dir, ignore_errors=True)  # Force delete without raising errors
     os.makedirs(work_dir, exist_ok=True)
-        
-def load_settings() -> Dict[str, Any]:
-    settings_path = os.path.join(BASE_DIR, "data", "persistent.json")
-    try:
-        with open(settings_path, "r") as f:
-            settings = json.load(f)
-            # Removed version check
-            if 'hardware_config' not in settings:
-                settings['hardware_config'] = {
-                    'OpenCL': False,
-                    'AVX2': False,
-                    'AOCL': False,
-                    'x64': False
-                }
-                print("Warning: Generated default hardware configuration")
-            return settings
-    except FileNotFoundError:
-        raise ConfigurationError("Missing persistent.json - run the installer first")
-    except json.JSONDecodeError as e:
-        raise ConfigurationError(f"Invalid JSON in persistent.json: {str(e)}")
-
-def detect_static_frame(frame1: np.ndarray, frame2: np.ndarray) -> bool:
-    """Detect if two consecutive frames are static using histogram comparison."""
-    # Convert to HSV color space
-    hsv1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2HSV)
-    hsv2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV)
-    
-    # Calculate histograms for hue and saturation channels
-    hist1 = cv2.calcHist([hsv1], [0, 1], None, [50, 60], [0, 180, 0, 256])
-    hist2 = cv2.calcHist([hsv2], [0, 1], None, [50, 60], [0, 180, 0, 256])
-    
-    # Normalize histograms
-    cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-    cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-    
-    # Compare histograms using correlation
-    similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
-    
-    # Get threshold from config
-    static_threshold = PROCESSING_CONFIG.get('static_threshold', 0.98)
-    return similarity >= static_threshold
-
-def detect_menu_screen(frame: np.ndarray) -> bool:
-    """Detect menu screens using text and UI element analysis."""
-    # Convert to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # Detect edges and text regions
-    edges = cv2.Canny(gray, 100, 200)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                  cv2.THRESH_BINARY_INV, 11, 2)
-    
-    # Analyze text-like contours
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    text_contours = len([c for c in contours if 0.1 < (cv2.boundingRect(c)[2]/cv2.boundingRect(c)[3]) < 15])
-    
-    # Calculate metrics
-    edge_density = np.count_nonzero(edges) / edges.size
-    menu_threshold = PROCESSING_CONFIG.get('menu_threshold', 0.85)
-    
-    return (text_contours > 10) and (edge_density < menu_threshold)
-
-def detect_texture_change(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """Detect significant texture changes between frames using Laplacian variance."""
-    # Convert to grayscale
-    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-    
-    # Calculate texture variance
-    texture1 = cv2.Laplacian(gray1, cv2.CV_64F).var()
-    texture2 = cv2.Laplacian(gray2, cv2.CV_64F).var()
-    
-    # Return True if texture difference exceeds threshold
-    return abs(texture1 - texture2) > threshold
-
-def detect_motion_opencl(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """
-    Detect motion between two frames using OpenCL.
-    
-    Args:
-        frame1: First frame (grayscale, np.uint8).
-        frame2: Second frame (grayscale, np.uint8).
-        threshold: Mean difference threshold for motion detection.
-    
-    Returns:
-        bool: True if motion is detected, False otherwise.
-    """
-    if prg is None:
-        print("Info: OpenCL not available, using CPU for motion detection")
-        return detect_motion_cpu(frame1, frame2, threshold)
-    
-    mf = cl.mem_flags
-    frame1_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame1)
-    frame2_buf = cl.Buffer(context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frame2)
-    diff_buf = cl.Buffer(context, mf.WRITE_ONLY, frame1.nbytes)
-    
-    prg.frame_diff(queue, frame1.shape, None, frame1_buf, frame2_buf, diff_buf,
-                   np.int32(frame1.shape[1]), np.int32(frame1.shape[0]))
-    
-    diff = np.empty_like(frame1)
-    cl.enqueue_copy(queue, diff, diff_buf).wait()
-    
-    return np.mean(diff) > threshold
-
-def detect_motion_avx2(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
-    """Detect motion using AVX2-optimized vector operations."""
-    # Convert frames to 32-bit floats for SIMD operations
-    f1 = frame1.astype(np.float32)
-    f2 = frame2.astype(np.float32)
-    
-    # Calculate absolute difference using vectorized operations
-    diff = np.abs(f1 - f2)
-    
-    # Use horizontal sum pattern optimized for AVX2
-    mean_diff = np.mean(diff)
-    
-    return mean_diff > threshold
+       
 
 def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
     """

@@ -1,16 +1,13 @@
-# launcher.py
+# Script: `launcher.py`
 
-# Imports...
+# Imports
 print("Initializing Imports..")
-import os, sys, json, time, traceback
-from moviepy.editor import VideoFileClip as mp_VideoFileClip 
+import os, sys, time, traceback
+from moviepy.editor import VideoFileClip as mp_VideoFileClip
 from typing import Dict, Any, Optional, List
-from dataclasses import dataclass
 from scripts.utility import (
-    load_settings,
     cleanup_work_directory,
     AudioAnalyzer,
-    SceneManager,
     PreviewGenerator,
     MemoryManager,
     ErrorHandler,
@@ -19,198 +16,162 @@ from scripts.utility import (
 from scripts.process import VideoProcessor
 from scripts.interface import launch_gradio_interface
 from scripts.analyze import VideoAnalyzer
-from scripts.temporary import SCENE_CONFIG
+from scripts.temporary import ConfigManager, get_full_path
+from scripts.hardware import HardwareManager  # NEW IMPORT
 print("..Imports Initialized.")
 
-# Classes...
+# Classes
 class MovieCompact:
     def __init__(self):
-        # Import configs dynamically to avoid circular imports
-        from scripts.temporary import PROCESSING_CONFIG, MEMORY_CONFIG, SCENE_CONFIG
-        # CoreUtilities, ErrorHandler, and other classes are assumed to be imported elsewhere or defined
-        self.core = CoreUtilities()  # Utility class for core operations
-        self.settings = load_settings()  # Load settings from a settings file or default
-        self.hardware_config = self.settings.get('hardware_config', {})  # Hardware settings
-        self.processing_config = PROCESSING_CONFIG  # Processing parameters
-        self.memory_config = MEMORY_CONFIG  # Memory management settings
-        self.error_handler = ErrorHandler()  # Initialize error handler for logging/reporting errors
-        # Define required directories and files for the project structure
-        self.required_dirs = ["data", "data/temp", "input", "output"]
+        self.core = CoreUtilities()
+        self.hardware_ctx = HardwareManager.create_context()  # NEW CONTEXT
+        self._init_configurations()
+        self._validate_environment()
+        self._init_components()
+
+    def _init_configurations(self):
+        """REPLACES manual config loading"""
+        self.supported_formats = ConfigManager.get('processing', 'supported_formats')
+        self.required_dirs = [
+            get_full_path('data'),
+            get_full_path('work'),
+            get_full_path('input'),
+            get_full_path('output')
+        ]
         self.required_files = [
-            os.path.join("data", "persistent.json"),
-            os.path.join("data", "requirements.txt"),
+            os.path.join(get_full_path('data'), "persistent.json"),
+            os.path.join(get_full_path('data'), "requirements.txt"),
             os.path.join("scripts", "__init__.py")
         ]
-        self.validate_environment()  # Ensure environment is set up correctly
-        # Initialize processing components
-        self.analyzer = VideoAnalyzer(settings=self.settings)
-        self.processor = VideoProcessor(settings=self.settings, analyzer=self.analyzer)
+
+    def _init_components(self):
+        """REPLACES manual component initialization"""
+        self.analyzer = VideoAnalyzer(hardware_ctx=self.hardware_ctx)
+        self.processor = VideoProcessor(
+            hardware_ctx=self.hardware_ctx,
+            analyzer=self.analyzer
+        )
         self.audio_analyzer = AudioAnalyzer()
-        self.scene_manager = SceneManager(scene_config=SCENE_CONFIG)
+        self.scene_manager = SceneManager()
         self.preview_generator = PreviewGenerator()
 
-    def validate_environment(self) -> None:
-        """Ensure required directories and files exist."""
-        # Create directories
+    def _validate_environment(self) -> None:
+        """UPDATED with dynamic path handling"""
         for path in self.required_dirs:
             os.makedirs(path, exist_ok=True)
             if not os.path.exists(path):
                 print(f"Created directory: {path}")
                 time.sleep(0.5)
 
-        # Verify/Create files
         for file_path in self.required_files:
             if not os.path.exists(file_path):
-                if "persistent.json" in file_path:
-                    self._create_default_settings(file_path)
-                elif "__init__.py" in file_path:
-                    open(file_path, 'w').close()
-                else:
-                    open(file_path, 'w').close()
+                self._create_file_resource(file_path)
                 print(f"Created file: {file_path}")
                 time.sleep(0.5)
 
-    def _create_default_settings(self, path: str) -> None:
-        """Create default persistent.json with hardware config."""
-        from scripts.temporary import ANALYSIS_CONFIG  # Add missing import
-        default_settings = {
-            "hardware_config": self.hardware_config,
-            "processing_config": self.processing_config,
-            "analysis_config": ANALYSIS_CONFIG
-        }
-        with open(path, 'w') as f:
-            json.dump(default_settings, f, indent=4)
+    def _create_file_resource(self, path: str):
+        """REPLACES _create_default_settings"""
+        if "persistent.json" in path:
+            with open(path, 'w') as f:
+                json.dump({"first_run": True}, f, indent=4)
+        else:
+            open(file_path, 'w').close()
 
     def print_hardware_info(self) -> None:
-        """Print hardware capabilities to inform the user of system support."""
+        """UPDATED with HardwareManager integration"""
+        caps = HardwareManager.detect_capabilities()
         print("\nHardware Capabilities:")
-        hw_caps = self.settings['hardware_config']
-        print(f"OpenCL Available: {hw_caps.get('OpenCL', False)}")
-        print(f"AVX2 Available: {hw_caps.get('AVX2', False)}")
-        print(f"AOCL Available: {hw_caps.get('AOCL', False)}")
-        print(f"x64 Architecture: {hw_caps.get('x64', False)}")
-        time.sleep(1)  # Pause for readability
+        print(f"OpenCL Available: {caps['OpenCL']}")
+        print(f"AVX2 Available: {caps['AVX2']}")
+        print(f"Architecture: {'x64' if caps['x64'] else 'x86'}")
+        print("\nActive Acceleration:")
+        print(f"Using OpenCL: {self.hardware_ctx['use_opencl']}")
+        print(f"Using AVX2: {self.hardware_ctx['use_avx2']}")
+        time.sleep(1)
 
     def validate_input_file(self, input_path: str) -> bool:
-        """Validate the input video file for existence, format, and integrity."""
+        """UPDATED with dynamic format checking"""
         if not os.path.exists(input_path):
-            print(f"Error: Input file not found: {input_path}")
-            time.sleep(5)
+            print(f"Error: File not found: {input_path}")
+            time.sleep(2)
             return False
+            
         ext = os.path.splitext(input_path)[1].lower()
-        supported_formats = ['.mp4', '.avi', '.mkv']  # Supported video formats
-        if ext not in supported_formats:
-            print(f"Error: Unsupported format. Supported: {', '.join(supported_formats)}")
-            time.sleep(5)
+        if ext not in self.supported_formats:
+            print(f"Error: Unsupported format. Supported: {', '.join(self.supported_formats)}")
+            time.sleep(3)
             return False
+            
         try:
-            clip = mp_VideoFileClip(input_path)  # Attempt to load video to check integrity
-            clip.close()
-            return True
+            with mp_VideoFileClip(input_path) as clip:
+                return clip.duration > 0
         except Exception as e:
-            print(f"Error: Invalid video file - {e}")
-            time.sleep(5)
+            print(f"Invalid video file: {str(e)}")
+            time.sleep(3)
             return False
-
-def print_hardware_info(self) -> None:
-    print("\nHardware Capabilities:")
-    hw_caps = self.settings['hardware_config']  # Consistent pattern
-    print(f"OpenCL Available: {hw_caps.get('OpenCL', False)}")
-    print(f"AVX2 Available: {hw_caps.get('AVX2', False)}")
-    print(f"AOCL Available: {hw_caps.get('AOCL', False)}")
-    print(f"x64 Architecture: {hw_caps.get('x64', False)}")
-    print("\nHardware Preferences:")
-    hw_prefs = self.settings['processing_config']['hardware_acceleration']
-    print(f"Use GPU: {hw_prefs.get('use_gpu', False)}")
-    print(f"Use OpenCL: {hw_prefs.get('use_opencl', False)}")
-    print(f"Use AVX2: {hw_prefs.get('use_avx2', False)}")
-    time.sleep(1)
-
-    def validate_input_file(self, input_path: str) -> bool:
-        if not os.path.exists(input_path):
-            print(f"Error: Input file not found: {input_path}")
-            time.sleep(5)  # Error: 5s
-            return False
-            
-        ext = os.path.splitext(input_path)[1].lower()
-        supported_formats = ['.mp4', '.avi', '.mkv']
-        
-        if ext not in supported_formats:
-            print(f"Error: Unsupported format. Supported: {', '.join(supported_formats)}")
-            time.sleep(5)  # Error: 5s 
-            return False
-            
-        return True
 
     def process_file(self, input_path: str, output_path: str, target_duration: float) -> None:
-        """Process a single video file."""
+        """Streamlined processing flow"""
+        if not self.validate_input_file(input_path):
+            return
+
         try:
-            if not self.validate_input_file(input_path):
-                return
-            
-            print(f"Info: Starting processing of {input_path}")
-            time.sleep(1)
-            result = self.processor.process_video(
+            print(f"Starting processing: {os.path.basename(input_path)}")
+            success = self.processor.process_video(
                 input_path,
                 output_path,
                 target_duration,
                 progress_callback=self._update_progress
             )
             
-            if result:
-                print(f"Info: Processing completed successfully. Output: {output_path}")
-                time.sleep(1)
+            if success:
+                print(f"\nOutput saved to: {output_path}")
             else:
-                print("Error: Processing failed")
-                time.sleep(5)
+                print("Processing failed")
         except Exception as e:
-            print(f"Error: Processing failed - {e}")
-            time.sleep(5)
+            print(f"Critical error: {str(e)}")
+            traceback.print_exc()
 
     def _update_progress(self, stage: str, progress: float, message: str) -> None:
-        """Update processing progress."""
+        """Real-time progress updates"""
         print(f"\r{stage}: {progress:.1f}% - {message}", end="")
-        # No sleep here to allow real-time progress updates
 
-# Functions...
+# Functions
 def print_usage():
-    """Print command-line usage information."""
-    print("\nMovie Consolidator Usage:")
-    print("  Launch GUI:")
-    print("    python launcher.py --gui")
-    print("  Process single file:")
-    print("    python launcher.py input_path output_path target_duration_minutes")
+    """Updated usage instructions"""
+    print("\nUsage:")
+    print("  GUI Mode: python launcher.py --gui")
+    print("  CLI Mode: python launcher.py [input] [output] [minutes]")
     print("\nExamples:")
     print("  python launcher.py --gui")
     print("  python launcher.py input/game.mp4 output/processed.mp4 120")
-    time.sleep(3)  # Important message: 3s
+    time.sleep(2)
 
 def main():
     try:
         os.system('cls' if os.name == 'nt' else 'clear')
-        print("========================================================================")
-        print("    Movie Consolidator")
-        print("========================================================================")
-        time.sleep(1)
+        print("Movie Consolidator - Action Video Processor")
+        print("-------------------------------------------")
         
-        print("\nInitializing Program..") 
         consolidator = MovieCompact()
-        print("..Initialization Complete.")
+        consolidator.print_hardware_info()
         
-        print("Program Starting..\n")
-        print("Launching GUI interface...")
-        time.sleep(1)
-        launch_gradio_interface()
+        if "--gui" in sys.argv:
+            launch_gradio_interface()
+        else:
+            if len(sys.argv) < 4:
+                print_usage()
+                return
+                
+            input_path, output_path, duration = sys.argv[1], sys.argv[2], float(sys.argv[3])
+            consolidator.process_file(input_path, output_path, duration*60)
 
     except Exception as e:
-        print(f"Critical error: {str(e)}")
+        print(f"Fatal error: {str(e)}")
         traceback.print_exc()
-        time.sleep(5)
-        
     finally:
         cleanup_work_directory()
         print("\nCleanup completed")
 
 if __name__ == "__main__":
-    print("Entering `main()`...")
     main()

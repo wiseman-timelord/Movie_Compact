@@ -31,7 +31,6 @@ from scripts.temporary import (
 from scripts.analyze import VideoAnalyzer
 from scripts.process import VideoProcessor, BatchProcessor
 
-
 # Classes...
 class InterfaceManager:
     def __init__(self):
@@ -46,6 +45,7 @@ class InterfaceManager:
         self.processor = VideoProcessor(settings=self.settings, analyzer=self.analyzer)
         self.batch_processor = BatchProcessor()
         self.processing_lock = Lock()
+        self.processor.progress.register_callback(self._update_progress)
 
     def _handle_batch_processing(self, selected_files: List[str], target_duration: float) -> str:
         """Handle batch processing of multiple video files."""
@@ -199,28 +199,24 @@ class InterfaceManager:
                     self._create_batch_queue_display()  # Add queue display
 
     def _create_settings_tab(self) -> None:
-        """Create settings configuration tab."""
         with gr.Tab("Settings"):
             with gr.Row():
-                # Video Settings
                 with gr.Column():
                     gr.Markdown("### Video Settings")
                     self.motion_threshold = gr.Slider(
                         minimum=0.1,
                         maximum=1.0,
-                        value=self.config['motion_threshold'],  # Changed from .motion_threshold
+                        value=ConfigManager.get('processing', 'scene_detection.motion_threshold'),
                         label="Motion Detection Sensitivity"
                     )
-
                     self.min_scene_duration = gr.Number(
-                        value=self.config['min_scene_duration'],  # Changed from .min_scene_duration
+                        value=ConfigManager.get('processing', 'scene_detection.min_scene_duration'),
                         label="Minimum Scene Duration (seconds)"
                     )
-
                     self.max_speed = gr.Slider(
                         minimum=1.0,
                         maximum=8.0,
-                        value=self.config['max_speed_factor'],  # Changed from .max_speed_factor
+                        value=ConfigManager.get('speed', 'max_speed_factor'),
                         label="Maximum Speed Factor"
                     )
 
@@ -682,26 +678,10 @@ class InterfaceManager:
         )
 
     def _update_progress(self, stage: str, progress: float, message: str) -> None:
-        """Update progress information."""
-        try:
-            self.progress_bar.update(progress / 100)
-            status = f"Stage: {stage}\nProgress: {progress:.1f}%\n{message}"
-            self.status_output.update(status)
-            
-            update_processing_state(
-                stage=stage,
-                progress=progress,
-                current_frame=GLOBAL_STATE.processing_state.current_frame,
-                total_frames=GLOBAL_STATE.processing_state.total_frames
-            )
-            
-            # Update metrics
-            self.metrics.update_processing_metrics(stage, progress)
-            self.metrics_display.update(self.metrics.get_metrics_report())
-            
-        except Exception as e:
-            print(f"Error: Updating progress failed - {e}")
-            time.sleep(5)
+        self.progress_bar.update(progress / 100)
+        self.status_output.update(f"Stage: {stage}\nProgress: {progress:.1f}%\n{message}")
+        self.metrics.update_processing_metrics(stage, progress)
+        self.metrics_display.update(self.metrics.get_metrics_report())
 
     def _validate_target_duration(self, target_duration: float) -> Tuple[bool, str]:
         """Validate target duration against video length."""

@@ -33,8 +33,6 @@ class ContentAnalyzer:
     """Advanced content analysis for video frames."""
     
     def __init__(self):
-        # Remove old settings loading
-        # self.settings = load_settings()
         self.frame_cache = {}
         # Add config values from temporary.py
         self.motion_threshold = ANALYSIS_CONFIG['motion_threshold']
@@ -44,10 +42,10 @@ class ContentAnalyzer:
         self.action_threshold = ANALYSIS_CONFIG['action_threshold']
     
     def analyze_frame(self, frame: np.ndarray) -> Dict[str, Any]:
-        """Single entry point for frame analysis."""
+        """Single entry point for frame analysis with optimized conversions."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 100, 200)
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        edges = cv2.Canny(gray, 100, 200)
         
         return {
             'text_regions': self._detect_text(gray),
@@ -145,25 +143,22 @@ class VideoAnalyzer:
         self.frame_buffer = deque(maxlen=self.memory_config['frame_buffer_size'])
 
     def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray, target_duration: float) -> List[Dict[str, Any]]:
+        from scripts.utility import SceneDetector
         self.progress.update_progress(40, "Processing scenes")
-        scenes = []
         
-        # Select motion detection method based on capabilities and preferences
-        prefs = self.settings.get('hardware_preferences', {})
-        if (prefs.get('use_opencl', True) and 
-            self.hardware_capabilities.get('OpenCL', False)):
-            motion_detector = detect_motion_opencl
-            print("Info: Using OpenCL for motion detection")
-            time.sleep(1)
-        elif (prefs.get('use_avx2', True) and 
-              self.hardware_capabilities.get('AVX2', False)):
-            motion_detector = detect_motion_avx2
-            print("Info: Using AVX2 for motion detection")
-            time.sleep(1)
-        else:
-            motion_detector = detect_motion_cpu
-            print("Info: Using CPU for motion detection")
-            time.sleep(1)
+        hardware_ctx = HardwareManager.create_context()
+        detector = SceneDetector(hardware_ctx)
+        audio_segments = self.audio_analyzer._detect_segments(audio)
+        scenes = detector.detect_scenes(frames, audio_segments)
+        
+        total_duration_current = sum((s.end_frame - s.start_frame) / 30 for s in scenes)
+        adjustment_factor = target_duration / total_duration_current if total_duration_current > 0 else 1.0
+        
+        for i, scene in enumerate(scenes):
+            scene.speed_factor = min(4.0, max(1.0, adjustment_factor if scene.scene_type != 'action' else 1.0))
+            self.progress.update_progress(40 + ((i + 1) / len(scenes)) * 40, f"Processed scene {i+1}/{len(scenes)}")
+        
+        return [dataclasses.asdict(s) for s in scenes]
     
     def analyze_video(self, video_path: str, target_duration: float) -> Dict[str, Any]:
         try:
@@ -242,10 +237,12 @@ class VideoAnalyzer:
         audio = self.audio_analyzer.extract_audio(video_path)
         return frames, audio
     
-    def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray,
-                        target_duration: float) -> List[Dict[str, Any]]:
-        """Process and analyze scenes."""
+    def _process_scenes(self, frames: List[np.ndarray], audio: np.ndarray, target_duration: float) -> List[Dict[str, Any]]:
         self.progress.update_progress(40, "Processing scenes")
+        scenes = []
+        
+        # Use centralized motion detector
+        motion_detector = get_motion_detector()
         
         # Extract audio segments
         audio_segments = []
@@ -273,6 +270,7 @@ class VideoAnalyzer:
         time.sleep(1)
         return scenes
 
+
 class SceneAnalyzer:
     def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
         """
@@ -294,6 +292,60 @@ class SceneAnalyzer:
             yield frames[scene_start:]
 
 # Functions...
+def detect_static_frame(frame1: np.ndarray, frame2: np.ndarray) -> bool:
+    """Detect if two consecutive frames are static using histogram comparison."""
+    # Convert to HSV color space
+    hsv1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2HSV)
+    hsv2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV)
+    
+    # Calculate histograms for hue and saturation channels
+    hist1 = cv2.calcHist([hsv1], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    hist2 = cv2.calcHist([hsv2], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    
+    # Normalize histograms
+    cv2.normalize(hist1, hist1, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    cv2.normalize(hist2, hist2, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    
+    # Compare histograms using correlation
+    similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+    
+    # Get threshold from config
+    static_threshold = PROCESSING_CONFIG.get('static_threshold', 0.98)
+    return similarity >= static_threshold
+
+def detect_menu_screen(frame: np.ndarray) -> bool:
+    """Detect menu screens using text and UI element analysis."""
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Detect edges and text regions
+    edges = cv2.Canny(gray, 100, 200)
+    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                  cv2.THRESH_BINARY_INV, 11, 2)
+    
+    # Analyze text-like contours
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    text_contours = len([c for c in contours if 0.1 < (cv2.boundingRect(c)[2]/cv2.boundingRect(c)[3]) < 15])
+    
+    # Calculate metrics
+    edge_density = np.count_nonzero(edges) / edges.size
+    menu_threshold = PROCESSING_CONFIG.get('menu_threshold', 0.85)
+    
+    return (text_contours > 10) and (edge_density < menu_threshold)
+
+def detect_texture_change(frame1: np.ndarray, frame2: np.ndarray, threshold: float) -> bool:
+    """Detect significant texture changes between frames using Laplacian variance."""
+    # Convert to grayscale
+    gray1 = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+    
+    # Calculate texture variance
+    texture1 = cv2.Laplacian(gray1, cv2.CV_64F).var()
+    texture2 = cv2.Laplacian(gray2, cv2.CV_64F).var()
+    
+    # Return True if texture difference exceeds threshold
+    return abs(texture1 - texture2) > threshold
+
 def _group_frames(self, frames: List[np.ndarray]) -> Generator[List[np.ndarray], None, None]:
     """Group frames into scenes based on motion detection."""
     # Select motion detection method
@@ -395,6 +447,18 @@ def estimate_processing_time(path: str) -> float:
         base_time *= min(resolution_factor, 2.0)
     
     return base_time
+
+def detect_scenes(frames: List[np.ndarray], audio_data: np.ndarray) -> List[SceneData]:
+    detector = SceneDetector(
+        motion_threshold=ConfigManager.get('PROCESSING', 'motion_threshold'),
+        texture_threshold=ConfigManager.get('PROCESSING', 'texture_threshold'),
+        hardware_ctx=HardwareManager.get_acceleration_context()
+    )
+    
+    return detector.analyze(
+        frames,
+        audio_analysis=AudioAnalyzer.analyze(audio_data)
+    )
 
 if __name__ == "__main__":
     import sys
