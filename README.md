@@ -33,11 +33,11 @@ A sophisticated video processing application that creates condensed, action-focu
 - Link for, information about and downloading of, the AVX/2/512 enhancement [AOCL](https://www.amd.com/en/developer/aocl.html) on AMD.Com.
 
 ## Development
-1. At stage of bugfixing first working version. Repeating issues with error `TypeError: argument of type 'bool' is not iterable` upon startup. Ai systems are stumped @ 2025/04. Possible solutions are...
+1. At stage of bugfixing first working version. Repeating issues with error `TypeError: argument of type 'bool' is not iterable` upon startup. The plan is...
+- 2 waves of optimizations were done, there is now possibly some missing code, but significantly reduced.
 - Assessment of Code, looking for obvious critical issues, then updating. Done once.
-- Optimize scripts, use more intelligent code to achieve the same result with less overall characters, then retry, due to less overall code.
 - Use Yaml instead, I think it may be a Json issue its blind to?
-- Its possibly the Gradio Interface. Try when better AI exists and/or premium on Claude available.
+- Upon failure of above, try when better AI exists/access than, DeepseekR1 and Grok3.
 
 ### Outline
 - Details of the outline...
