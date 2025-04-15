@@ -4,6 +4,8 @@
 import os, json, time, sys, traceback, webbrowser
 from threading import Timer
 import gradio as gr
+import pandas as pd  # Add for DataFrame creation
+import psutil  # Add for memory monitoring
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from datetime import datetime
 from dataclasses import dataclass
@@ -27,7 +29,7 @@ from scripts.temporary import (
     VideoMetadata,
     get_full_path,
     update_processing_state,
-    AUDIO_CONFIG  # Add this line
+    AUDIO_CONFIG
 )
 from scripts.analyze import VideoAnalyzer
 from scripts.process import VideoProcessor, BatchProcessor
@@ -35,7 +37,7 @@ from scripts.process import VideoProcessor, BatchProcessor
 # Classes...
 class InterfaceManager:
     def __init__(self):
-        self.core = CoreUtilities()  # Core utilities instance
+        self.core = CoreUtilities()
         self.file_processor = FileProcessor(
             supported_formats=self.config['supported_formats']
         )
@@ -90,12 +92,26 @@ class InterfaceManager:
         Convert long videos into concise, action-packed highlight reels.
         """)
 
+    def _update_file_sizes_plot(self) -> pd.DataFrame:
+        """Generate DataFrame for all files in input directory."""
+        files = self._get_input_files()  # Get all valid files
+        if not files:
+            return pd.DataFrame({"File": [], "Size (GB)": []})
+        files = sorted(files)  # Alphanumeric order
+        sizes = []
+        for file in files:
+            path = os.path.join("input", file)
+            if os.path.exists(path):
+                size_gb = os.path.getsize(path) / (1024**3)
+                sizes.append(size_gb)
+            else:
+                sizes.append(0)
+        return pd.DataFrame({"File": files, "Size (GB)": sizes})
+
     def _create_main_tab(self) -> None:
-        """Create main processing tab."""
         with gr.Tab("Process Video"):
             with gr.Row():
                 with gr.Column(scale=2):
-                    # Input Section
                     with gr.Group():
                         gr.Markdown("### Input Video")
                         self.video_input = gr.File(
@@ -113,7 +129,6 @@ class InterfaceManager:
                             minimum=1
                         )
 
-                    # Process Section
                     with gr.Group():
                         gr.Markdown("### Processing")
                         with gr.Row():
@@ -135,7 +150,6 @@ class InterfaceManager:
                         )
 
                 with gr.Column(scale=1):
-                    # Monitoring Section
                     gr.Markdown("### Processing Log")
                     self.event_log = gr.TextArea(
                         label="Events",
@@ -150,6 +164,18 @@ class InterfaceManager:
                         value="No metrics available",
                         lines=10
                     )
+
+                    # Add memory usage bar plot
+                    with gr.Group():
+                        gr.Markdown("### Memory Usage During Processing")
+                        self.memory_bar_plot = gr.BarPlot(
+                            x="Memory Type",
+                            y="Usage (GB)",
+                            title="Memory Usage",
+                            tooltip=["Memory Type", "Usage (GB)"],
+                            height=300,
+                            width=400
+                        )
 
                     with gr.Row():
                         self.refresh_log_btn = gr.Button("Refresh Log")
@@ -172,7 +198,20 @@ class InterfaceManager:
                         visible=not bool(files)
                     )
                     
-                    # Add refresh button
+                    # file sizes bar plot
+                    with gr.Group():
+                        gr.Markdown("### File Sizes in Input Directory")  # Updated title
+                        initial_file_sizes = self._update_file_sizes_plot()
+                        self.file_size_bar_plot = gr.BarPlot(
+                            x="File",
+                            y="Size (GB)",
+                            title="File Sizes",
+                            tooltip=["File", "Size (GB)"],
+                            height=300,
+                            width=400,
+                            value=initial_file_sizes  # Set initial data
+                        )
+                    
                     self.refresh_files_btn = gr.Button("Refresh File List")
                     
                     self.batch_target_duration = gr.Number(
@@ -199,7 +238,8 @@ class InterfaceManager:
                         lines=15
                     )
                     self.batch_progress = gr.Progress()
-                    self._create_batch_queue_display()  # Add queue display
+                    self._create_batch_queue_display()
+            
 
     def _create_settings_tab(self) -> None:
         with gr.Tab("Configuration"):
@@ -311,16 +351,48 @@ class InterfaceManager:
             - Clear the log if it becomes too long
             """)
 
+    def _update_progress(self, stage: str, progress: float, message: str) -> None:
+        """Update progress bar, status, metrics, and memory usage."""
+        with self.processing_lock:
+            # Update progress and status
+            self.progress_bar.update(progress / 100)
+            self.status_output.update(f"Stage: {stage}\nProgress: {progress:.1f}%\n{message}")
+            
+            # Update metrics
+            self.metrics.update_processing_metrics(stage, progress)
+            self.metrics_display.update(self.metrics.get_metrics_report())
+            
+            # Update memory plot every 5 seconds
+            current_time = time.time()
+            if not hasattr(self, 'last_memory_update') or current_time - self.last_memory_update > 5:
+                self.last_memory_update = current_time
+                memory_df = self._get_memory_usage_df()
+                self.memory_bar_plot.update(value=memory_df)
+
+    def _get_memory_usage_df(self) -> pd.DataFrame:
+        """Generate DataFrame for memory usage bar plot."""
+        process = psutil.Process()
+        mem_info = process.memory_info()
+        ram_gb = mem_info.rss / (1024**3)  # Resident Set Size (RAM)
+        pagefile_gb = getattr(mem_info, 'pagefile', 0) / (1024**3) if hasattr(mem_info, 'pagefile') else 0  # Page File on Windows
+        return pd.DataFrame({
+            "Memory Type": ["RAM", "Page File"],
+            "Usage (GB)": [ram_gb, pagefile_gb]
+        })
+
     def _setup_event_handlers(self, interface: gr.Blocks) -> None:
         """Setup event handlers for interface elements."""
-        # File selection handlers
+        # Existing handlers remain unchanged, only listing for completeness
         self.refresh_files_btn.click(
-                fn=self._update_file_list,
-                inputs=None,
-                outputs=[self.file_list, self.batch_status_msg, self.batch_process_btn]
-            )
+            fn=self._update_file_list,
+            inputs=None,
+            outputs=[self.file_list, self.batch_status_msg, self.batch_process_btn]
+        ).then(
+            fn=self._update_file_sizes_plot,  # Add this line
+            inputs=None,
+            outputs=self.file_size_bar_plot
+        )
 
-        # Processing handlers
         self.process_btn.click(
             fn=self._handle_processing,
             inputs=[self.video_input, self.target_duration],
@@ -341,12 +413,11 @@ class InterfaceManager:
             outputs=[self.process_btn, self.cancel_btn, self.video_input, self.target_duration]
         )
 
-        # Batch processing handlers
         self.batch_process_btn.click(
             fn=self._handle_batch_processing,
             inputs=[self.file_list, self.batch_target_duration],
             outputs=[self.batch_status],
-            preprocess=False  # Disable Gradio's input validation
+            preprocess=False
         )
 
         self.batch_cancel_btn.click(
@@ -356,7 +427,6 @@ class InterfaceManager:
             queue=False
         )
 
-        # Settings handlers
         self.save_settings_btn.click(
             fn=self._save_settings,
             inputs=[
@@ -382,8 +452,7 @@ class InterfaceManager:
                 self.enhance_audio
             ]
         )
-        
-        # Update hardware status displays
+
         self.vram_dropdown.change(
             fn=lambda v: gr.Markdown.update(
                 value=f"VRAM Allocation: {v}GB | Restart required for full effect"
@@ -392,7 +461,6 @@ class InterfaceManager:
             outputs=self.opencl_status
         )
 
-        # Log handlers
         self.refresh_log_btn.click(
             fn=self._refresh_log,
             outputs=[self.event_log, self.metrics_display]
@@ -820,7 +888,7 @@ def launch_gradio_interface():
         print("Debug: InterfaceManager created, launching interface...")
         manager.launch()
         print("Debug: Interface launched successfully")
-        while True:  # Keep the main thread alive
+        while True:
             time.sleep(1)
     except Exception as e:
         print(f"Error: Failed to launch interface - {str(e)}")
@@ -832,7 +900,7 @@ if __name__ == "__main__":
     try:
         print("\nLaunching Movie Consolidator interface...")
         time.sleep(1)
-        launch_gradio_interface()  # Remove log_manager
+        launch_gradio_interface()
     except KeyboardInterrupt:
         print("\nShutdown requested by user")
         time.sleep(1)
