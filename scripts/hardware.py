@@ -7,66 +7,48 @@ import sys
 
 # Classes...
 class HardwareManager:
-    """Centralized hardware capability detection and context management"""
+    """Centralized hardware context management with manual VRAM configuration"""
     
     @classmethod
-    def detect_capabilities(cls) -> dict:
-        """
-        Detect hardware capabilities, including AMD OpenCL GPUs and AVX2 CPU support.
-        Returns a dictionary with detected features and GPU details.
-        """
-        caps = {
-            'OpenCL': False,
-            'AVX2': 'avx2' in cpuinfo.get_cpu_info()['flags'],
-            'AOCL': False,
-            'x64': sys.maxsize > 2**32,
-            'gpu_devices': []
+    def create_context(cls) -> dict:
+        """Create processing context with manual VRAM limits"""
+        ctx = {
+            'vram_limit': ConfigManager.get_vram_limit(),
+            'use_opencl': False,
+            'use_avx2': False,
+            'platform': None,
+            'device': None
         }
-        
+
+        # OpenCL detection with manual VRAM limits
         try:
             platforms = cl.get_platforms()
             for platform in platforms:
                 if "AMD" in platform.name:
                     devices = platform.get_devices(device_type=cl.device_type.GPU)
-                    for device in devices:
-                        vram = device.global_mem_size // (1024 ** 3)  # Convert bytes to GB
-                        caps['gpu_devices'].append({
-                            'name': device.name.strip(),
-                            'vram_gb': vram
-                        })
                     if devices:
-                        caps['OpenCL'] = True
-                        caps['AOCL'] = True
-        except Exception as e:
-            print(f"OpenCL detection failed: {str(e)}")
-            
-        return caps
-
-    @classmethod
-    def create_context(cls) -> dict:
-        ctx = {
-            'use_opencl': False,
-            'use_avx2': True,  # Assume AVX2 is always available per your hardware
-            'platform': None,
-            'device': None
-        }
-        
-        try:
-            platforms = cl.get_platforms()
-            for platform in platforms:
-                if "AMD" in platform.name:
-                    devices = platform.get_devices()
-                    for device in devices:
-                        if device.type == cl.device_type.GPU and device.global_mem_size >= 8 * 1024**3:
-                            ctx.update({
-                                'use_opencl': True,
-                                'platform': platform,
-                                'device': device
-                            })
-                            break
-                    if ctx['use_opencl']:
+                        # Use first compatible device regardless of reported VRAM
+                        ctx.update({
+                            'use_opencl': True,
+                            'platform': platform,
+                            'device': devices[0]
+                        })
                         break
         except Exception as e:
-            print(f"OpenCL init failed: {e}, falling back to AVX2")
+            print(f"OpenCL initialization failed: {str(e)}")
+
+        # AVX2 fallback detection
+        ctx['use_avx2'] = not ctx['use_opencl'] and cls._has_avx2()
         
+        print(f"Hardware context: {ctx}")
         return ctx
+
+    @classmethod
+    def _has_avx2(cls):
+        """Safe AVX2 detection with fallback"""
+        try:
+            info = cpuinfo.get_cpu_info()
+            return 'avx2' in info.get('flags', [])
+        except Exception as e:
+            print(f"AVX2 detection failed: {str(e)}")
+            return False

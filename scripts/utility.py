@@ -44,10 +44,13 @@ class MemoryManager:
         self.max_usage = ConfigManager.get('memory', 'max_memory_usage')
         self.warning_thresh = ConfigManager.get('memory', 'warning_threshold')
         self.hardware_ctx = hardware_ctx
-        self.vram_limit = 8 * 1024**3  # 8GB VRAM for RX470
-        self.sram_limit = 64 * 1024**3  # Assume 64GB SRAM (72GB total - 8GB VRAM)
+        self.vram_limit = hardware_ctx['vram_limit']
+        self.sram_limit = min(system_ram, 64 * 1024**
+        system_ram = psutil.virtual_memory().total
         self.vram_usage = 0
         self.sram_usage = 0
+        
+        
 
     def track(self, obj):
         """Track objects for cleanup using weak references."""
@@ -80,14 +83,13 @@ class MemoryManager:
         self.track(arr)
         return arr
 
-    def check_memory(self) -> dict:
-        """Check current memory usage against thresholds."""
+    def check_memory(self):
         process = psutil.Process()
-        usage = process.memory_info().rss
         return {
-            "usage": usage,
-            "warning": usage > self.warning_thresh,
-            "critical": usage > self.max_usage
+            "vram_usage": self.vram_usage,
+            "sram_usage": process.memory_info().rss,
+            "warning": process.memory_info().rss > self.sram_limit * 0.7,
+            "critical": process.memory_info().rss > self.sram_limit * 0.9
         }
 
     def cleanup(self, force: bool = False) -> None:
@@ -101,34 +103,30 @@ class MemoryManager:
             self.vram_usage = 0
             self.sram_usage = 0
 
-    def stream_video(self, file_path, chunk_size=1024**3):  # 1GB chunks
-        """Stream video in chunks using ffmpeg-python."""
-        try:
-            probe = ffmpeg.probe(file_path)
-            video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
-            width = int(video_info['width'])
-            height = int(video_info['height'])
-            fps = eval(video_info['r_frame_rate'])
-
-            process = (
-                ffmpeg
-                .input(file_path)
-                .output('pipe:', format='rawvideo', pix_fmt='rgb24')
-                .run_async(pipe_stdout=True)
-            )
-
-            bytes_per_frame = width * height * 3
-            chunk_frames = chunk_size // bytes_per_frame
-
-            while True:
-                chunk = process.stdout.read(chunk_frames * bytes_per_frame)
-                if not chunk:
-                    break
-                frames = np.frombuffer(chunk, dtype=np.uint8).reshape(-1, height, width, 3)
-                yield frames
-        except Exception as e:
-            print(f"Error streaming video: {e}")
-            yield np.array([])
+    def stream_video(self, file_path):
+        cap = cv2.VideoCapture(file_path)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        bytes_per_frame = width * height * 3
+        
+        # Calculate dynamic chunk size
+        safe_vram = self.vram_limit * 0.7
+        safe_sram = self.sram_limit * 0.5
+        chunk_size = int(min(safe_vram, safe_sram))
+        chunk_frames = chunk_size // bytes_per_frame
+        
+        while True:
+            frames = []
+            for _ in range(chunk_frames):
+                ret, frame = cap.read()
+                if not ret: break
+                frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            
+            if not frames: break
+            yield frames
+            
+            if self.check_memory()['warning']:
+                self.cleanup(force=True)
 
 class SceneDetector:
     def __init__(self, hardware_ctx: dict):

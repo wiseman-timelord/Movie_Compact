@@ -82,58 +82,54 @@ SPEED_CONFIG = {
 
 # Classes...
 class ConfigManager:
-    """REPLACES all direct config dictionary access"""
     _configs = {
         'processing': PROCESSING_CONFIG,
         'audio': AUDIO_CONFIG,
         'memory': MEMORY_CONFIG,
         'paths': PATHS_CONFIG,
-        'speed': SPEED_CONFIG
+        'speed': SPEED_CONFIG,
+        'hardware': {
+            'vram_options': ['2', '4', '6', '8', '10', '12'],
+            'selected_vram': '8',
+            'opencl_enabled': True,
+            'avx2_fallback': True
+        }
     }
 
     @classmethod
     def get(cls, category: str, key: str, default=None):
-        """Get config value using dot-notation keys"""
         keys = key.split('.')
         value = cls._configs.get(category.lower(), {})
-        
         for k in keys:
             value = value.get(k, {})
             if not isinstance(value, dict):
                 break
-                
         return value if value != {} else default
 
     @classmethod
-    def update(cls, category: str, updates: dict):
-        """Deep update for nested config structures"""
-        category = category.lower()
-        if category not in cls._configs:
-            raise ValueError(f"Invalid config category: {category}")
-            
-        def _update(d, u):
-            for k, v in u.items():
-                if isinstance(v, dict):
-                    d[k] = _update(d.get(k, {}), v)
-                else:
-                    d[k] = v
-            return d
-            
-        cls._configs[category] = _update(cls._configs[category], updates)
+    def set_vram(cls, vram_gb: str):
+        if vram_gb in cls._configs['hardware']['vram_options']:
+            cls._configs['hardware']['selected_vram'] = vram_gb
+        else:
+            raise ValueError(f"Invalid VRAM selection: {vram_gb}")
+
+    @classmethod
+    def get_vram_limit(cls):
+        return int(cls._configs['hardware']['selected_vram']) * 1024**3
 
     @classmethod
     def load_persistent(cls):
-        """REPLACES load_settings() from utility.py"""
         config_path = os.path.join(BASE_DIR, 'data', 'persistent.json')
         try:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
             for category, settings in user_config.items():
-                cls.update(category, settings)
+                if category == 'hardware':
+                    cls._configs[category].update(settings)
+                else:
+                    cls.update(category, settings)
         except FileNotFoundError:
             print("No persistent config found, using defaults")
-        except json.JSONDecodeError as e:
-            print(f"Invalid config file: {str(e)}")
 
 # DataClasses...
 @dataclass

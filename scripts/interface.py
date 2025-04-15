@@ -203,61 +203,63 @@ class InterfaceManager:
 
     def _create_settings_tab(self) -> None:
         with gr.Tab("Configuration"):
-            # Video and Audio Settings in two columns
             with gr.Row():
+                # Video Settings Column
                 with gr.Column():
-                    gr.Markdown("### Video Settings")
+                    gr.Markdown("### Video Processing")
                     self.motion_threshold = gr.Slider(
                         minimum=0.1,
                         maximum=1.0,
-                        value=ConfigManager.get('processing', 'scene_detection.motion_threshold'),
+                        value=ConfigManager.get('processing', 'scene_detection.motion_threshold', 0.3),
                         label="Motion Detection Sensitivity"
                     )
                     self.min_scene_duration = gr.Number(
-                        value=ConfigManager.get('processing', 'scene_detection.min_scene_duration'),
-                        label="Minimum Scene Duration (seconds)"
+                        value=ConfigManager.get('processing', 'scene_detection.min_scene_duration', 2.0),
+                        label="Minimum Scene Duration (seconds)",
+                        precision=1
                     )
                     self.max_speed = gr.Slider(
                         minimum=1.0,
                         maximum=8.0,
-                        value=ConfigManager.get('speed', 'max_speed_factor'),
+                        value=ConfigManager.get('speed', 'max_speed_factor', 4.0),
                         label="Maximum Speed Factor"
                     )
 
+                # Hardware Configuration Column
                 with gr.Column():
-                    gr.Markdown("### Audio Settings")
-                    self.preserve_pitch = gr.Checkbox(
-                        value=AUDIO_CONFIG['preserve_pitch'],
-                        label="Preserve Audio Pitch"
+                    gr.Markdown("### Hardware Configuration")
+                    
+                    # Manual VRAM Selection
+                    self.vram_dropdown = gr.Dropdown(
+                        label="VRAM Allocation (GB)",
+                        choices=ConfigManager.get('hardware', 'vram_options', ['8']),
+                        value=ConfigManager.get('hardware', 'selected_vram', '8'),
+                        interactive=True
                     )
-                    self.enhance_audio = gr.Checkbox(
-                        value=AUDIO_CONFIG['enhance_audio'],
-                        label="Enhance Audio Quality"
+                    
+                    # Acceleration Status
+                    gr.Markdown("### Active Acceleration", elem_id="accel_status")
+                    self.opencl_status = gr.Markdown(
+                        f"OpenCL: {'Enabled' if self.hardware_capabilities['OpenCL'] else 'Disabled'}"
+                    )
+                    self.avx2_status = gr.Markdown(
+                        f"AVX2: {'Available' if self.hardware_capabilities['AVX2'] else 'Unavailable'}"
                     )
 
-            # Hardware Preferences in a separate row
+            # Audio Settings Row
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("### Hardware Preferences")
-                    hw_caps = self.settings['hardware_config']
-                    
-                    # GPU Selection Dropdown
-                    gpu_choices = [f"{gpu['name']} ({gpu['vram_gb']}GB)" for gpu in hw_caps.get('gpu_devices', [])]
-                    self.gpu_selection = gr.Dropdown(
-                        label="Select GPU",
-                        choices=gpu_choices if gpu_choices else ["No GPU detected"],
-                        value=gpu_choices[0] if gpu_choices else "No GPU detected",
-                        interactive=bool(gpu_choices)
+                    gr.Markdown("### Audio Processing")
+                    self.preserve_pitch = gr.Checkbox(
+                        value=ConfigManager.get('audio', 'preserve_pitch', True),
+                        label="Preserve Audio Pitch During Speed Changes"
                     )
-                    
-                    # AVX2 Checkbox (enabled only if no GPU or as fallback)
-                    self.use_avx2 = gr.Checkbox(
-                        value=bool(self.config.get("hardware_preferences", {}).get("use_avx2", False)),
-                        label=f"Use AVX2 ({'Available' if hw_caps.get('AVX2', False) else 'Unavailable'})",
-                        interactive=hw_caps.get('AVX2', False) and not gpu_choices
+                    self.enhance_audio = gr.Checkbox(
+                        value=ConfigManager.get('audio', 'enhance_audio', True),
+                        label="Enable Audio Enhancement"
                     )
 
-            # Buttons for saving/resetting settings
+            # Control Buttons
             with gr.Row():
                 self.save_settings_btn = gr.Button("Save Settings", variant="primary")
                 self.reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
@@ -356,31 +358,38 @@ class InterfaceManager:
 
         # Settings handlers
         self.save_settings_btn.click(
-                fn=self._save_settings,
-                inputs=[
-                    self.motion_threshold,
-                    self.min_scene_duration,
-                    self.max_speed,
-                    self.enhance_audio,
-                    self.use_opencl,
-                    self.use_avx2,
-                    self.use_aocl
-                ],
-                outputs=[self.status_output]
-            )
-
-        self.reset_settings_btn.click(
-            fn=self._reset_settings,
-            outputs=[
+            fn=self._save_settings,
+            inputs=[
+                self.vram_dropdown,
                 self.motion_threshold,
                 self.min_scene_duration,
                 self.max_speed,
                 self.preserve_pitch,
-                self.enhance_audio,
-                self.use_opencl,
-                self.use_avx2,
-                self.use_aocl
+                self.enhance_audio
+            ],
+            outputs=[self.status_output]
+        )
+        
+        self.reset_settings_btn.click(
+            fn=self._reset_settings,
+            inputs=None,
+            outputs=[
+                self.vram_dropdown,
+                self.motion_threshold,
+                self.min_scene_duration,
+                self.max_speed,
+                self.preserve_pitch,
+                self.enhance_audio
             ]
+        )
+        
+        # Update hardware status displays
+        self.vram_dropdown.change(
+            fn=lambda v: gr.Markdown.update(
+                value=f"VRAM Allocation: {v}GB | Restart required for full effect"
+            ),
+            inputs=self.vram_dropdown,
+            outputs=self.opencl_status
         )
 
         # Log handlers
@@ -527,90 +536,114 @@ class InterfaceManager:
         self.batch_processor.cancel_processing()
         return "Batch processing cancelled"
 
-    def _save_settings(self, motion_threshold: float, min_scene_duration: float, max_speed: float,
-                      preserve_pitch: bool, enhance_audio: bool, use_opencl: bool,
-                      use_avx2: bool, use_aocl: bool) -> str:
-        """Save UI settings to persistent.json with strict type validation."""
-        # Validate numerical parameters
-        if not isinstance(motion_threshold, (int, float)) or not (0 <= motion_threshold <= 1):
-            return "Motion threshold must be a number between 0 and 1"
-        
-        if not isinstance(min_scene_duration, (int, float)) or min_scene_duration <= 0:
-            return "Minimum scene duration must be a positive number"
-        
-        if not isinstance(max_speed, (int, float)) or max_speed < 1:
-            return "Maximum speed factor must be at least 1"
-
-        # Validate boolean parameters
-        bool_params = {
-            'preserve_pitch': preserve_pitch,
-            'enhance_audio': enhance_audio,
-            'use_opencl': use_opencl,
-            'use_avx2': use_avx2,
-            'use_aocl': use_aocl
-        }
-        
-        for param, value in bool_params.items():
-            if not isinstance(value, bool):
-                return f"Invalid type for {param.replace('_', ' ')} - must be boolean"
-
+    def _save_settings(self, vram_gb: str, motion_thresh: float, min_duration: float,
+                      max_speed: float, preserve_pitch: bool, enhance_audio: bool):
+        """Handle settings save with validation"""
         try:
-            # Create structured settings with explicit typing
-            new_settings = {
-                'motion_threshold': float(motion_threshold),
-                'min_scene_duration': float(min_scene_duration),
-                'max_speed_factor': float(max_speed),
-                'preserve_pitch': bool(preserve_pitch),
-                'enhance_audio': bool(enhance_audio),
-                'hardware_acceleration': {
-                    'use_opencl': bool(use_opencl),
-                    'use_avx2': bool(use_avx2),
-                    'use_aocl': bool(use_aocl)
+            # Validate numerical parameters
+            if not (0.1 <= motion_thresh <= 1.0):
+                raise ValueError("Motion threshold must be between 0.1 and 1.0")
+                
+            if min_duration < 0.5:
+                raise ValueError("Minimum scene duration must be at least 0.5 seconds")
+                
+            if max_speed < 1.0 or max_speed > 8.0:
+                raise ValueError("Speed factor must be between 1.0 and 8.0")
+                
+            # Validate VRAM selection
+            valid_vram = ConfigManager.get('hardware', 'vram_options', ['8'])
+            if vram_gb not in valid_vram:
+                raise ValueError(f"Invalid VRAM selection. Valid options: {', '.join(valid_vram)}")
+
+            # Update configuration through ConfigManager
+            ConfigManager.update('processing', {
+                'scene_detection': {
+                    'motion_threshold': float(motion_thresh),
+                    'min_scene_duration': float(min_duration)
+                },
+                'speed': {
+                    'max_speed_factor': float(max_speed)
                 }
-            }
-
-            # Merge with existing config to preserve unmodified settings
-            full_config = {**PROCESSING_CONFIG, **new_settings}
-            full_config['hardware_acceleration'] = {
-                **PROCESSING_CONFIG.get('hardware_acceleration', {}),
-                **new_settings['hardware_acceleration']
-            }
-
-            # Update audio config separately
-            AUDIO_CONFIG.update({
-                'preserve_pitch': new_settings['preserve_pitch'],
-                'enhance_audio': new_settings['enhance_audio']
             })
-
-            # Save to persistent storage
-            persistent_file = os.path.join("data", "persistent.json")
-            with open(persistent_file, "w") as f:
-                json.dump(full_config, f, indent=4, default=str)
-
-            # Update runtime configurations
-            PROCESSING_CONFIG.update(full_config)
             
-            print("Info: Settings saved successfully")
-            time.sleep(1)
+            ConfigManager.update('audio', {
+                'preserve_pitch': bool(preserve_pitch),
+                'enhance_audio': bool(enhance_audio)
+            })
+            
+            ConfigManager.set_vram(vram_gb)
+
+            # Persist to disk
+            persistent_path = os.path.join(BASE_DIR, 'data', 'persistent.json')
+            with open(persistent_path, 'w') as f:
+                json.dump({
+                    'processing': ConfigManager._configs['processing'],
+                    'audio': ConfigManager._configs['audio'],
+                    'hardware': ConfigManager._configs['hardware']
+                }, f, indent=4)
+
+            # Update runtime components
+            self.processor.config = ConfigManager._configs['processing']
+            self.processor.audio_config = ConfigManager._configs['audio']
+            
             return "Settings saved successfully"
             
         except Exception as e:
-            print(f"Error: Settings save failed - {e}")
-            time.sleep(5)
+            self.error_handler.handle_error(e, "settings_save")
             return f"Error saving settings: {str(e)}"
 
-    def _reset_settings(self) -> List[Any]:
-        """Reset settings to defaults."""
-        return [
-            self.config['motion_threshold'],  # Ensure all references use dict syntax
-            self.config['min_scene_duration'],
-            self.config['max_speed_factor'],
-            AUDIO_CONFIG['preserve_pitch'],
-            AUDIO_CONFIG['enhance_audio'],
-            True,  # use_opencl
-            True,  # use_avx2
-            True   # use_aocl
-        ]
+    def _reset_settings(self):
+        """Reset all settings to defaults"""
+        try:
+            # Hardware defaults
+            ConfigManager.set_vram('8')
+            ConfigManager.update('hardware', {
+                'opencl_enabled': True,
+                'avx2_fallback': True
+            })
+            
+            # Processing defaults
+            ConfigManager.update('processing', {
+                'scene_detection': {
+                    'motion_threshold': 0.3,
+                    'min_scene_duration': 2.0
+                },
+                'speed': {
+                    'max_speed_factor': 4.0
+                }
+            })
+            
+            # Audio defaults
+            ConfigManager.update('audio', {
+                'preserve_pitch': True,
+                'enhance_audio': True
+            })
+            
+            # Persist defaults
+            persistent_path = os.path.join(BASE_DIR, 'data', 'persistent.json')
+            if os.path.exists(persistent_path):
+                os.remove(persistent_path)
+            ConfigManager.load_persistent()
+            
+            return [
+                '8',  # vram_dropdown
+                0.3,  # motion_threshold
+                2.0,  # min_scene_duration
+                4.0,  # max_speed
+                True,  # preserve_pitch
+                True   # enhance_audio
+            ]
+            
+        except Exception as e:
+            self.error_handler.handle_error(e, "settings_reset")
+            return [
+                gr.Dropdown.update(value='8'),
+                gr.Slider.update(value=0.3),
+                gr.Number.update(value=2.0),
+                gr.Slider.update(value=4.0),
+                gr.Checkbox.update(value=True),
+                gr.Checkbox.update(value=True)
+            ]
 
     def _refresh_log(self) -> Tuple[str, str]:
         """Refresh log display."""
