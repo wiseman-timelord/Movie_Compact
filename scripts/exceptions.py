@@ -1,4 +1,4 @@
-# scripts/exceptions.py
+# Script: `.\scripts\exceptions.py`
 
 # Exception classes
 class MovieCompactError(Exception):

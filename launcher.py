@@ -1,4 +1,4 @@
-# Script: `launcher.py`
+# Script: `.\launcher.py`
 
 # Imports
 print("Initializing Imports..")

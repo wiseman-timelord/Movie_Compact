@@ -1,4 +1,4 @@
-# scripts/temporary.py
+# Script: `/\scripts/temporary.py`
 
 # Imports...
 from dataclasses import dataclass

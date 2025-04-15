@@ -1,18 +1,18 @@
-# .\scripts\utility.py
+# script: `.\scripts\utility.py`
 
 # Imports...
-import os, cv2, time
+import os, cv2, time, weakref
 import moviepy.editor as mp
 from dataclasses import dataclass
 import numpy as np
 import pyopencl as cl
-import json, datetime, sys, psutil, librosa, shutil, gc
+import json, datetime, sys, psutil, librosa, shutil, gc, ffmpeg
 from typing import Tuple, List, Dict, Any, Generator, Optional, Callable, Union
 from threading import Lock, Event
 from queue import Queue
 from scripts.exceptions import (HardwareError, ConfigurationError, MovieCompactError)
 from scripts.temporary import (
-    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, BASE_DIR, get_full_path
+    MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, BASE_DIR, get_full_path, ConfigManager
 )
 
 # OpenCL kernel for frame difference
@@ -37,18 +37,24 @@ class CoreUtilities:
         self.error_handler = ErrorHandler()
 
 class MemoryManager:
-    def __init__(self):
+    def __init__(self, hardware_ctx):
+        """Initialize MemoryManager with hardware context."""
         self.tracked_objects = []
         self.cleanup_interval = ConfigManager.get('memory', 'cleanup_interval', 60)
         self.max_usage = ConfigManager.get('memory', 'max_memory_usage')
         self.warning_thresh = ConfigManager.get('memory', 'warning_threshold')
-        
+        self.hardware_ctx = hardware_ctx
+        self.vram_limit = 8 * 1024**3  # 8GB VRAM for RX470
+        self.sram_limit = 64 * 1024**3  # Assume 64GB SRAM (72GB total - 8GB VRAM)
+        self.vram_usage = 0
+        self.sram_usage = 0
+
     def track(self, obj):
-        """REPLACES manual memory tracking"""
+        """Track objects for cleanup using weak references."""
         self.tracked_objects.append(weakref.ref(obj))
-        
+
     def auto_cleanup(self, func):
-        """DECORATOR for automatic cleanup"""
+        """Decorator for automatic memory cleanup after function execution."""
         def wrapper(*args, **kwargs):
             try:
                 result = func(*args, **kwargs)
@@ -56,15 +62,26 @@ class MemoryManager:
                 self.cleanup(force=True)
             return result
         return wrapper
-    
-    def managed_array(self, shape, dtype):
-        """REPLACES direct numpy array creation"""
-        arr = np.empty(shape, dtype)
+
+    def managed_array(self, shape, dtype, use_vram=True):
+        """Create a managed array, preferring VRAM if OpenCL is available."""
+        size = np.prod(shape) * np.dtype(dtype).itemsize
+        if use_vram and self.hardware_ctx['use_opencl'] and self.vram_usage + size <= self.vram_limit:
+            # Allocate in VRAM using OpenCL buffer
+            arr = cl.Buffer(self.hardware_ctx['context'], cl.mem_flags.READ_WRITE, size=size)
+            self.vram_usage += size
+        elif self.sram_usage + size <= self.sram_limit:
+            # Allocate in SRAM
+            arr = np.empty(shape, dtype)
+            self.sram_usage += size
+        else:
+            # Fall back to page file
+            arr = np.empty(shape, dtype)
         self.track(arr)
         return arr
 
-    def check_memory(self) -> Dict[str, Any]:
-        """Check current memory usage against thresholds"""
+    def check_memory(self) -> dict:
+        """Check current memory usage against thresholds."""
         process = psutil.Process()
         usage = process.memory_info().rss
         return {
@@ -74,15 +91,44 @@ class MemoryManager:
         }
 
     def cleanup(self, force: bool = False) -> None:
-        """Perform memory cleanup of tracked objects"""
+        """Perform memory cleanup of tracked objects."""
         current_usage = self.check_memory()
-        
         if force or current_usage["warning"]:
-            self.tracked_objects = [
-                ref for ref in self.tracked_objects
-                if ref() is not None  # Only keep alive objects
-            ]
+            # Remove references to deallocated objects
+            self.tracked_objects = [ref for ref in self.tracked_objects if ref() is not None]
             gc.collect()
+            # Reset usage counters (simplified; actual VRAM release depends on OpenCL)
+            self.vram_usage = 0
+            self.sram_usage = 0
+
+    def stream_video(self, file_path, chunk_size=1024**3):  # 1GB chunks
+        """Stream video in chunks using ffmpeg-python."""
+        try:
+            probe = ffmpeg.probe(file_path)
+            video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
+            width = int(video_info['width'])
+            height = int(video_info['height'])
+            fps = eval(video_info['r_frame_rate'])
+
+            process = (
+                ffmpeg
+                .input(file_path)
+                .output('pipe:', format='rawvideo', pix_fmt='rgb24')
+                .run_async(pipe_stdout=True)
+            )
+
+            bytes_per_frame = width * height * 3
+            chunk_frames = chunk_size // bytes_per_frame
+
+            while True:
+                chunk = process.stdout.read(chunk_frames * bytes_per_frame)
+                if not chunk:
+                    break
+                frames = np.frombuffer(chunk, dtype=np.uint8).reshape(-1, height, width, 3)
+                yield frames
+        except Exception as e:
+            print(f"Error streaming video: {e}")
+            yield np.array([])
 
 class SceneDetector:
     def __init__(self, hardware_ctx: dict):
@@ -245,21 +291,24 @@ class ErrorHandler:
         self._lock = Lock()
         self.max_retries = ERROR_CONFIG['max_retries']
         self.retry_delay = ERROR_CONFIG['retry_delay']
+        self.memory_manager = memory_manager
+        self.error_log = []
 
-    def handle_error(self, error: Exception, context: str) -> Dict[str, Any]:
-        with self._lock:
+    def handle_error(self, error: Exception, context: str) -> dict:
             error_info = {
                 'timestamp': datetime.datetime.now(),
                 'error': str(error),
                 'context': context,
-                'type': type(error).__name__,
-                'can_retry': self._can_retry(error),
-                'recovery_action': self._get_recovery_action(error)
+                'type': type(error).__name__
             }
-            
             self.error_log.append(error_info)
-            print(f"Error: [{error_info['type']}] In {context}: {str(error)}")  # Changed
-            time.sleep(5)  # Added
+            print(f"Error: [{error_info['type']}] In {context}: {error}")
+            time.sleep(5)
+
+            if isinstance(error, MemoryError):
+                self.memory_manager.vram_usage = 0  # Reset VRAM tracking
+                self.memory_manager.sram_usage = 0  # Reset SRAM tracking
+                print("Memory cleared due to MemoryError")
             
             return error_info
 
@@ -312,17 +361,10 @@ class ErrorHandler:
 class AudioProcessor:
     def __init__(self, sample_rate: int = 44100):
         self.sample_rate = sample_rate
-        self.settings = {}  # Assume settings are set elsewhere or passed in
 
     def _reduce_noise(self, audio: np.ndarray) -> np.ndarray:
         """
         Reduce noise using spectral subtraction.
-
-        Args:
-            audio: Input audio array (mono, float32).
-
-        Returns:
-            np.ndarray: Noise-reduced audio.
         """
         noise_sample = audio[:int(0.5 * self.sample_rate)]
         noise_stft = librosa.stft(noise_sample, n_fft=2048, hop_length=512)
@@ -336,12 +378,6 @@ class AudioProcessor:
     def _enhance_clarity(self, audio: np.ndarray) -> np.ndarray:
         """
         Enhance clarity using a bandpass filter for voice frequencies.
-
-        Args:
-            audio: Input audio array (mono, float32).
-
-        Returns:
-            np.ndarray: Clarity-enhanced audio.
         """
         lowcut, highcut = 1000.0, 4000.0
         nyquist = 0.5 * self.sample_rate
@@ -363,11 +399,11 @@ class AudioProcessor:
         """Process audio with noise reduction, pitch preservation, and clarity enhancement."""
         try:
             audio = self._normalize_audio(audio)
-            if self.settings.get('audio', {}).get('noise_reduction', True):
+            if AUDIO_CONFIG.get('noise_reduction', True):
                 audio = self._reduce_noise(audio)
-            if speed_factor != 1.0 and self.settings.get('audio', {}).get('preserve_pitch', True):
+            if speed_factor != 1.0 and AUDIO_CONFIG.get('preserve_pitch', True):
                 audio = self._preserve_pitch(audio, speed_factor)
-            if self.settings.get('audio', {}).get('enhance_clarity', True):
+            if AUDIO_CONFIG.get('enhance_audio', True):
                 audio = self._enhance_clarity(audio)
             return audio
         except Exception as e:
@@ -523,19 +559,20 @@ def detect_motion_cpu(frame1: np.ndarray, frame2: np.ndarray, threshold: float) 
     diff = cv2.absdiff(frame1, frame2)
     return np.mean(diff) > threshold
     
-def extract_frames_optimized(video_path: str, batch_size: int = 32) -> Generator[np.ndarray, None, None]:
+def extract_frames_optimized(video_path: str, batch_size: int = 32, memory_manager: MemoryManager = None) -> Generator[np.ndarray, None, None]:
     """
     Optimized frame extraction with batch processing and hardware acceleration.
     
     Args:
         video_path: Path to video file
         batch_size: Number of frames to process in each batch
+        memory_manager: Instance of MemoryManager for tracking memory usage
         
     Yields:
-        Frames in BGR format
+        Frames in RGB format
     """
     try:
-        # Try hardware-accelerated decoding first
+        # Try hardware-accelerated decoding with AVC/H.264 preference
         cap = cv2.VideoCapture(video_path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
             cap = cv2.VideoCapture(video_path)  # Fallback to default
@@ -546,19 +583,19 @@ def extract_frames_optimized(video_path: str, batch_size: int = 32) -> Generator
             if not ret:
                 break
 
-            # Convert to RGB for consistency with other processing
+            # Convert to RGB for consistency
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_buffer.append(frame)
 
-            # Process in batches for memory efficiency
+            # Process in batches
             if len(frame_buffer) >= batch_size:
                 for f in frame_buffer:
                     yield f
                 frame_buffer = []
 
-                # Check memory usage periodically
-                if MemoryManager().check_memory()['warning']:
-                    MemoryManager().cleanup(force=True)
+                # Check memory usage if manager provided
+                if memory_manager and memory_manager.check_memory()['warning']:
+                    memory_manager.cleanup(force=True)
 
         # Yield remaining frames
         for f in frame_buffer:
@@ -567,6 +604,6 @@ def extract_frames_optimized(video_path: str, batch_size: int = 32) -> Generator
         cap.release()
         
     except Exception as e:
-        print(f"Error: Frame extraction failed - {e}")  # Replaced log_event
-        time.sleep(5)  # Added
+        print(f"Error: Frame extraction failed - {e}")
+        time.sleep(5)
         raise MovieCompactError(f"Frame extraction failed: {e}")

@@ -1,11 +1,10 @@
-# process.py
+# Script: `.\scripts\process.py`
 
 # Imports
-import cv2
-import time
-import os
+import cv2, time, os, librosa
 from dataclasses import dataclass
 import numpy as np
+import pyopencl as cl
 import moviepy.editor as mp
 from typing import Dict, Any, Optional, List, Tuple, Callable, Union
 from queue import Queue
@@ -45,6 +44,8 @@ class SceneProcessor:
     def __init__(self, config: Dict[str, Any], audio_processor: AudioProcessor):
         self.config = config
         self.audio_processor = audio_processor
+        self.hardware_ctx = hardware_ctx
+        self.sample_rate = sample_rate
 
     def process(self, scene_type: str, clip: mp.VideoFileClip, scene: SceneData) -> mp.VideoFileClip:
         """Process a scene based on its type."""
@@ -89,12 +90,18 @@ class SceneProcessor:
             return clip.copy()
 
     def _process_audio(self, clip: mp.VideoFileClip, speed_factor: float) -> mp.VideoFileClip:
-        from scripts.utility import AudioProcessor
+        """
+        Process audio for a video clip, optimized for AAC from AVC/H.264.
+        """
         if clip.audio is None:
             return clip
-        audio_processor = AudioProcessor(sample_rate=AUDIO_CONFIG['sample_rate'])
+        audio_processor = AudioProcessor(sample_rate=44100)  # Common AAC sample rate
         audio_array = clip.audio.to_soundarray()
-        processed_audio = audio_processor.process_audio(audio_array, speed_factor)
+        # Handle AAC audio specifically
+        if clip.audio.fps == 44100 and clip.audio.nchannels == 2:  # Typical AAC characteristics
+            processed_audio = audio_processor.process_audio(audio_array, speed_factor)
+        else:
+            processed_audio = audio_array
         return clip.set_audio(mp.AudioArrayClip(processed_audio, fps=clip.audio.fps))
 
     def _create_speed_transition(self, clip: mp.VideoFileClip, start_speed: float, 
@@ -114,7 +121,7 @@ class SceneProcessor:
 # VideoProcessor class
 class VideoProcessor:
     """Optimized video processing engine."""
-    def __init__(self, settings=None, analyzer=None):
+    def __init__(self, settings=None, analyzer=None, hardware_ctx):
         self.core = CoreUtilities()
         self.settings = settings or load_settings()
         self.config = PROCESSING_CONFIG
@@ -125,53 +132,171 @@ class VideoProcessor:
         
         self.analyzer = analyzer  # Use provided analyzer
         self.audio_processor = AudioProcessor()
-        self.memory_manager = MemoryManager()
+        self.memory_manager = memory_manager
         self.progress = ProgressMonitor()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
         self.scene_processor = SceneProcessor(self.config, self.audio_processor)
-        self.cancel_flag = Event()
+        self.hardware_ctx = hardware_ctx
+        self.kernel = None
         self._lock = Lock()
+        if self.hardware_ctx.get('use_opencl', False):
+            self._setup_opencl()
 
-    def process_video(self, input_path: str, output_path: str, 
-                     target_duration: float,
-                     progress_callback: Optional[Callable] = None) -> bool:
-        """Process a video file according to analysis results."""
+    @profile  # Memory profiling decorator
+    def process_video(self, input_path, output_path, scenes, target_duration):
+        audio_files = []
+        frame_count = 0
+
+        chunk_size = 1024**3  # 1GB chunks
+        for chunk_frames in self.memory_manager.stream_video(input_path, chunk_size):
+            if self.cancel_flag.is_set():
+                break
+            # Process each chunk (placeholder for actual processing logic)
+            processed_chunk = self._process_chunk(chunk_frames)
+            # Accumulate or write processed chunk to output (implement as needed)
+            if progress_callback:
+                progress_callback("Processing chunk...")
+        # Finalize output (implement as needed)
+        if progress_callback:
+            progress_callback("Video processing complete")
+
+        # Stream video frames
+        memory_manager = MemoryManager()
+        for frames in memory_manager.stream_video(input_path):
+            if frames.size == 0:
+                continue
+            # Simulate OpenCL processing (e.g., frame differencing)
+            if self.hardware_ctx['use_opencl']:
+                mf = cl.mem_flags
+                frame1_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frames[0].flatten())
+                frame2_buf = cl.Buffer(self.context, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=frames[1].flatten() if len(frames) > 1 else frames[0].flatten())
+                diff_buf = cl.Buffer(self.context, mf.WRITE_ONLY, frames[0].size)
+                self.program.frame_diff(self.queue, frames[0].shape[:2], None, frame1_buf, frame2_buf, diff_buf, np.int32(frames.shape[2]), np.int32(frames.shape[1]))
+                diff = np.empty_like(frames[0].flatten())
+                cl.enqueue_copy(self.queue, diff, diff_buf)
+            else:
+                # AVX2 or NumPy fallback (assuming AOCL if available)
+                diff = np.abs(frames[0] - frames[1]) if len(frames) > 1 else frames[0]
+            frame_count += len(frames)
+
+        # Process audio for each scene
+        for i, scene in enumerate(scenes):
+            start_time = scene['start_time']
+            end_time = scene['end_time']
+            speed_factor = scene['speed_factor']
+            temp_audio = f"temp_audio_{i}.wav"
+            filter_chain = f"rubberband=tempo={speed_factor}" if self.has_rubberband() else f"atempo={speed_factor}"
+            (
+                ffmpeg
+                .input(input_path, ss=start_time, to=end_time)
+                .filter_(filter_chain)
+                .output(temp_audio)
+                .run(quiet=True)
+            )
+            audio_files.append(temp_audio)
+
+        # Concatenate audio files
+        audio_list_file = "audio_list.txt"
+        with open(audio_list_file, 'w') as f:
+            for audio_file in audio_files:
+                f.write(f"file '{audio_file}'\n")
+        concatenated_audio = "concatenated_audio.wav"
+        (
+            ffmpeg
+            .input(audio_list_file, format='concat', safe=0)
+            .output(concatenated_audio)
+            .run(quiet=True)
+        )
+
+        # Simulate writing output (simplified; in practice, use moviepy or ffmpeg to merge)
+        probe = ffmpeg.probe(input_path)
+        duration = float(probe['format']['duration'])
+        print(f"Processed {frame_count} frames, original duration: {duration}s, target duration: {target_duration}s")
+
+        # Clean up
+        for audio_file in audio_files:
+            os.remove(audio_file)
+        os.remove(audio_list_file)
+        os.remove(concatenated_audio)
+
+    def _setup_opencl(self):
+        """Set up OpenCL kernel for frame differencing optimized for RX470."""
+        context = self.hardware_ctx['context']
+        queue = cl.CommandQueue(context)
+        program = cl.Program(context, """
+            __kernel void frame_diff(__global const uchar *frame1, __global const uchar *frame2,
+                                   __global uchar *diff, int width, int height) {
+                int x = get_global_id(0);
+                int y = get_global_id(1);
+                if (x < width && y < height) {
+                    int idx = (y * width + x) * 3;
+                    diff[idx] = abs(frame1[idx] - frame2[idx]);
+                    diff[idx + 1] = abs(frame1[idx + 1] - frame2[idx + 1]);
+                    diff[idx + 2] = abs(frame1[idx + 2] - frame2[idx + 2]);
+                }
+            }
+        """).build()
+        self.kernel = program.frame_diff
+        self.queue = queue
+
+    def has_rubberband(self):
         try:
-            with self._lock:
-                self.cancel_flag.clear()
-                self.progress.start_stage("Processing")
-                
-                # Get scene data from global state if available
-                scenes = GLOBAL_STATE.detected_scenes if GLOBAL_STATE.detected_scenes else []
-                
-                # Phase 1: Analysis if not already done
-                if not scenes:
-                    analysis = self._analyze_video(input_path, target_duration)
-                    if not analysis or self.cancel_flag.is_set():
-                        return False
-                    scenes = [SceneData(**scene) for scene in analysis['scenes']]
-                
-                # Phase 2: Scene Processing
-                processed_scenes = self._process_scenes(input_path, scenes)
-                if not processed_scenes or self.cancel_flag.is_set():
-                    return False
-                
-                # Phase 3: Final Compilation
-                success = self._compile_video(
-                    processed_scenes,
-                    output_path,
-                    GLOBAL_STATE.current_video.fps if GLOBAL_STATE.current_video else 30.0
-                )
-                
-                self.progress.complete_stage("Processing")
-                self.memory_manager.cleanup()
-                
-                return success
-                
-        except Exception as e:
-            self.error_handler.handle_error(e, "video_processing")
+            result = subprocess.run(['ffmpeg', '-filters'], capture_output=True, text=True)
+            return 'rubberband' in result.stdout
+        except:
             return False
+
+    def _process_chunk(self, chunk_frames):
+        """
+        Process a chunk of frames using OpenCL for frame differencing and motion detection.
+        """
+        if self.kernel and len(chunk_frames) >= 2:
+            frame1 = cl.Buffer(self.hardware_ctx['context'], cl.mem_flags.READ_ONLY, size=chunk_frames[0].nbytes)
+            frame2 = cl.Buffer(self.hardware_ctx['context'], cl.mem_flags.READ_ONLY, size=chunk_frames[1].nbytes)
+            diff = cl.Buffer(self.hardware_ctx['context'], cl.mem_flags.WRITE_ONLY, size=chunk_frames[0].nbytes)
+            cl.enqueue_copy(self.queue, frame1, chunk_frames[0].tobytes())
+            cl.enqueue_copy(self.queue, frame2, chunk_frames[1].tobytes())
+            self.kernel(self.queue, chunk_frames[0].shape[:2], (16, 16), frame1, frame2, diff,
+                        np.int32(chunk_frames[0].shape[1]), np.int32(chunk_frames[0].shape[0]))
+            result = np.empty_like(chunk_frames[0])
+            cl.enqueue_copy(self.queue, result, diff)
+            
+            # Motion detection example
+            motion_score = np.mean(result)
+            if motion_score > self.config.get('processing_config', {}).get('motion_threshold', 0.3):
+                # Placeholder: Process as motion scene (e.g., adjust speed)
+                return chunk_frames  # Return original frames for now
+            else:
+                # Placeholder: Skip or compress static scene
+                return [chunk_frames[0]]  # Return first frame as static
+        return chunk_frames  # Fallback to CPU
+
+    def process_video(self, input_path, output_path, target_duration, progress_callback=None):
+        """
+        Optimized video processing with chunking and OpenCL support.
+        """
+        chunk_size = 1024**3  # 1GB chunks
+        for chunk_frames in self.memory_manager.stream_video(input_path, chunk_size):
+            if self.cancel_flag.is_set():
+                break
+            processed_chunk = self._process_chunk(chunk_frames)
+            # Write or accumulate processed chunk (implement as needed)
+            if progress_callback:
+                progress_callback("Processing chunk...")
+        if progress_callback:
+            progress_callback("Video processing complete")
+
+    def process_audio(self, input_path, speed_factor=1.0):
+            """Process audio from AVC/MP4 files, preserving characteristics."""
+            try:
+                audio, sr = librosa.load(input_path, sr=None)
+                if speed_factor != 1.0:
+                    audio = librosa.effects.time_stretch(audio, rate=speed_factor)
+                return audio, sr
+            except Exception as e:
+                print(f"Error processing audio: {e}")
+                return np.array([]), 0
 
     def _analyze_video(self, input_path: str, 
                       target_duration: float) -> Optional[Dict[str, Any]]:

@@ -1,5 +1,6 @@
-# interface.py
+# Script: `.\scripts\interface.py`
 
+# Imports
 import os, json, time, sys, traceback, webbrowser
 from threading import Timer
 import gradio as gr
@@ -35,11 +36,13 @@ from scripts.process import VideoProcessor, BatchProcessor
 class InterfaceManager:
     def __init__(self):
         self.core = CoreUtilities()  # Core utilities instance
-        self.config = PROCESSING_CONFIG  # MUST COME FIRST
         self.file_processor = FileProcessor(
             supported_formats=self.config['supported_formats']
         )
-        self.settings = load_settings()
+        self.settings = settings
+        self.config = config
+        self.gpu_selection = None
+        self.use_avx2 = None
         self.hardware_capabilities = self.settings['hardware_config']
         self.analyzer = VideoAnalyzer(settings=self.settings)
         self.processor = VideoProcessor(settings=self.settings, analyzer=self.analyzer)
@@ -199,7 +202,8 @@ class InterfaceManager:
                     self._create_batch_queue_display()  # Add queue display
 
     def _create_settings_tab(self) -> None:
-        with gr.Tab("Settings"):
+        with gr.Tab("Configuration"):
+            # Video and Audio Settings in two columns
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Video Settings")
@@ -220,53 +224,43 @@ class InterfaceManager:
                         label="Maximum Speed Factor"
                     )
 
-                # Audio Settings
                 with gr.Column():
                     gr.Markdown("### Audio Settings")
                     self.preserve_pitch = gr.Checkbox(
-                        value=AUDIO_CONFIG['preserve_pitch'],  # Fixed line
+                        value=AUDIO_CONFIG['preserve_pitch'],
                         label="Preserve Audio Pitch"
                     )
                     self.enhance_audio = gr.Checkbox(
-                        value=AUDIO_CONFIG['enhance_audio'],   # Fixed line
+                        value=AUDIO_CONFIG['enhance_audio'],
                         label="Enhance Audio Quality"
                     )
 
-            # Hardware Preferences
+            # Hardware Preferences in a separate row
             with gr.Row():
                 with gr.Column():
                     gr.Markdown("### Hardware Preferences")
-                    # Get actual detected capabilities from hardware.json
                     hw_caps = self.settings['hardware_config']
                     
-                    # Use explicit boolean checks with fallbacks
-                    self.use_opencl = gr.Checkbox(
-                        value=bool(self.config.get("hardware_acceleration", {}).get("use_opencl", False)),
-                        label=f"Use OpenCL ({'Available' if hw_caps.get('OpenCL', False) else 'Unavailable'})",
-                        interactive=hw_caps.get('OpenCL', False)
+                    # GPU Selection Dropdown
+                    gpu_choices = [f"{gpu['name']} ({gpu['vram_gb']}GB)" for gpu in hw_caps.get('gpu_devices', [])]
+                    self.gpu_selection = gr.Dropdown(
+                        label="Select GPU",
+                        choices=gpu_choices if gpu_choices else ["No GPU detected"],
+                        value=gpu_choices[0] if gpu_choices else "No GPU detected",
+                        interactive=bool(gpu_choices)
                     )
                     
+                    # AVX2 Checkbox (enabled only if no GPU or as fallback)
                     self.use_avx2 = gr.Checkbox(
                         value=bool(self.config.get("hardware_preferences", {}).get("use_avx2", False)),
                         label=f"Use AVX2 ({'Available' if hw_caps.get('AVX2', False) else 'Unavailable'})",
-                        interactive=hw_caps.get('AVX2', False)
-                    )
-                    
-                    self.use_aocl = gr.Checkbox(
-                        value=bool(self.config.get("hardware_preferences", {}).get("use_aocl", False)),
-                        label=f"Use AOCL ({'available' if self.hardware_capabilities.get('AOCL', False) else 'not available'})",
-                        interactive=bool(self.hardware_capabilities.get('AOCL', False))  # Explicit bool conversion
+                        interactive=hw_caps.get('AVX2', False) and not gpu_choices
                     )
 
+            # Buttons for saving/resetting settings
             with gr.Row():
-                self.save_settings_btn = gr.Button(
-                    "Save Settings",
-                    variant="primary"
-                )
-                self.reset_settings_btn = gr.Button(
-                    "Reset to Defaults",
-                    variant="secondary"
-                )
+                self.save_settings_btn = gr.Button("Save Settings", variant="primary")
+                self.reset_settings_btn = gr.Button("Reset to Defaults", variant="secondary")
 
     def _create_help_tab(self) -> None:
         """Create help and documentation tab."""

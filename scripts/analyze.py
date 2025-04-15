@@ -1,4 +1,4 @@
-# .\scripts\analyze.py
+# Script: `\scripts\analyze.py`
 
 # Imports...
 import cv2

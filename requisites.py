@@ -1,3 +1,6 @@
+# Script: `.\requisites.py`
+
+# Imports
 import os
 import shutil
 import subprocess
@@ -113,8 +116,15 @@ def detect_hardware():
     return hardware_info
 
 def create_persistent_json(hardware_info):
-    """Create or overwrite persistent.json with unified configuration."""
+    """Create or update persistent.json with unified configuration, merging with existing settings."""
     print("Creating/Updating persistent.json with unified configuration...")
+    
+    persistent_file = os.path.join(BASE_DIR, "data", "persistent.json")
+    if os.path.exists(persistent_file):
+        with open(persistent_file, "r") as f:
+            existing_settings = json.load(f)
+    else:
+        existing_settings = {}
     
     default_settings = {
         "hardware_config": hardware_info,
@@ -161,16 +171,19 @@ def create_persistent_json(hardware_info):
             "work_path": "data/temp"
         }
     }
-
-    persistent_file = os.path.join(BASE_DIR, "data", "persistent.json")
-    if os.path.exists(persistent_file):
-        print("persistent.json already exists. Overwriting with new configuration.")
-    else:
-        print("Creating new persistent.json with configuration.")
+    
+    # Merge existing settings with defaults
+    for key in default_settings:
+        if key not in existing_settings:
+            existing_settings[key] = default_settings[key]
+        elif isinstance(existing_settings[key], dict):
+            for subkey in default_settings[key]:
+                if subkey not in existing_settings[key]:
+                    existing_settings[key][subkey] = default_settings[key][subkey]
     
     with open(persistent_file, "w") as f:
-        json.dump(default_settings, f, indent=4)
-    print(f"persistent.json created/updated with hardware info: {hardware_info}")
+        json.dump(existing_settings, f, indent=4)
+    print(f"persistent.json updated with hardware info: {hardware_info}")
 
 def verify_installation():
     """Verify installation with new config structure."""
