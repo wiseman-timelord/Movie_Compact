@@ -72,12 +72,11 @@ def create_requirements_file():
         "opencv-python==4.8.1.78",
         "pyopencl==2023.1.1",
         "librosa==0.10.1",
-        "pydub==0.25.1",
         "py-cpuinfo==9.0.0",
-        "scikit-image==0.22.0",
         "scipy==1.11.4",
-        "siphash24==1.4",
-        "moviepy==1.0.3"
+        "moviepy==1.0.3",
+        "ffmpeg-python==0.2.0",
+        "tqdm==4.66.1"
     ]
     req_file = os.path.join(BASE_DIR, "data", "requirements.txt")
     with open(req_file, "w") as f:
