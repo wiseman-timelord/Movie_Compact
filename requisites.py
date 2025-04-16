@@ -103,6 +103,8 @@ def detect_hardware():
         time.sleep(5)
 
     try:
+        import warnings
+        warnings.filterwarnings("ignore", message="Unable to import recommended hash", module="pytools.persistent_dict")
         import pyopencl as cl
         platforms = cl.get_platforms()
         hardware_info["OpenCL"] = len(platforms) > 0
