@@ -42,7 +42,7 @@ A sophisticated video processing application that creates condensed, action-focu
 ### Outline
 - Details of the outline...
 ```
-  1. a) Real-time logging system with live updates displayed in the main "Consolidate" page text box, using `.\data\events.txt`. The display auto-refreshes to show progress during processing.
+  1. a) The display auto-refreshes to show progress during processing, with the ability to break from the look via .net.
   1. b) Advanced file analysis that evaluates input files, determining path, length, filesize, and calculates required reduction ratios.
   2. Intelligent preview system that converts videos to 360p in the `work` folder, enabling fast frame analysis while maintaining full quality for final output. This dual-processing approach prevents memory overload.
   3. Static frame detection system that identifies and removes paused screens, menus, and message popups.
