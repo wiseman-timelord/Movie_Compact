@@ -7,40 +7,47 @@ import sys
 
 # Classes...
 class HardwareManager:
-    """Centralized hardware context management with manual VRAM configuration"""
-    
     @classmethod
     def create_context(cls) -> dict:
-        """Create processing context with manual VRAM limits"""
+        """Create processing context respecting user configuration"""
         ctx = {
             'vram_limit': ConfigManager.get_vram_limit(),
-            'use_opencl': False,
-            'use_avx2': False,
+            'use_opencl': ConfigManager.get('hardware', 'opencl_enabled', False),
+            'use_avx2': ConfigManager.get('hardware', 'avx2_fallback', False),
             'platform': None,
-            'device': None
+            'device': None,
+            'context': None
         }
 
-        # OpenCL detection with manual VRAM limits
-        try:
-            platforms = cl.get_platforms()
-            for platform in platforms:
-                if "AMD" in platform.name:
-                    devices = platform.get_devices(device_type=cl.device_type.GPU)
-                    if devices:
-                        # Use first compatible device regardless of reported VRAM
-                        ctx.update({
-                            'use_opencl': True,
-                            'platform': platform,
-                            'device': devices[0]
-                        })
+        # OpenCL detection only if enabled in config
+        if ctx['use_opencl']:
+            try:
+                platforms = cl.get_platforms()
+                platform_preference = ConfigManager.get('processing', 'hardware_acceleration.opencl_platform_preference', 
+                                                      ['NVIDIA', 'AMD', 'Intel'])
+                for pref in platform_preference:
+                    for platform in platforms:
+                        if pref in platform.name:
+                            devices = platform.get_devices(cl.device_type.GPU)
+                            if devices:
+                                ctx.update({
+                                    'platform': platform,
+                                    'device': devices[0],
+                                    'context': cl.Context(devices=[devices[0]])
+                                })
+                                break
+                    if ctx['device']:
                         break
-        except Exception as e:
-            print(f"OpenCL initialization failed: {str(e)}")
+            except Exception as e:
+                print(f"OpenCL init failed: {e}")
+                ctx['use_opencl'] = False
 
-        # AVX2 fallback detection
-        ctx['use_avx2'] = not ctx['use_opencl'] and cls._has_avx2()
-        
-        print(f"Hardware context: {ctx}")
+        # AVX2 fallback handling
+        if not ctx['use_opencl'] and ctx['use_avx2']:
+            ctx['use_avx2'] = cls._has_avx2()
+        else:
+            ctx['use_avx2'] = False
+
         return ctx
 
     @classmethod

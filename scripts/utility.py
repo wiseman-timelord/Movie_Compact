@@ -15,7 +15,7 @@ from scripts.temporary import (
     MEMORY_CONFIG, ERROR_CONFIG, AUDIO_CONFIG, PROCESSING_CONFIG, BASE_DIR, get_full_path, ConfigManager
 )
 
-# OpenCL kernel for frame difference
+# OpenCL kernel for frame difference (can this be removed or is it required?)
 kernel_code = """
 __kernel void frame_diff(__global const uchar *frame1, __global const uchar *frame2,
                          __global uchar *diff, int width, int height) {
@@ -27,14 +27,13 @@ __kernel void frame_diff(__global const uchar *frame1, __global const uchar *fra
     }
 }
 """
-prg = cl.Program(context, kernel_code).build()
 
 # Classes...
 class CoreUtilities:
-    def __init__(self):
-        self.memory_manager = MemoryManager()
+    def __init__(self, hardware_ctx):
+        self.memory_manager = MemoryManager(hardware_ctx)
         self.progress_monitor = ProgressMonitor()
-        self.error_handler = ErrorHandler()
+        self.error_handler = ErrorHandler(self.memory_manager)
 
 class MemoryManager:
     def __init__(self, hardware_ctx):
@@ -43,13 +42,13 @@ class MemoryManager:
         self.cleanup_interval = ConfigManager.get('memory', 'cleanup_interval', 60)
         self.max_usage = ConfigManager.get('memory', 'max_memory_usage')
         self.warning_thresh = ConfigManager.get('memory', 'warning_threshold')
+        self.critical_thresh = ConfigManager.get('memory', 'critical_threshold')
         self.hardware_ctx = hardware_ctx
         self.vram_limit = hardware_ctx['vram_limit']
-        self.sram_limit = min(system_ram, 64 * 1024**
         system_ram = psutil.virtual_memory().total
+        self.sram_limit = system_ram * self.max_usage
         self.vram_usage = 0
         self.sram_usage = 0
-        
         
 
     def track(self, obj):
@@ -284,13 +283,12 @@ class ProgressMonitor:
 class ErrorHandler:
     """Handle and manage processing errors."""
     
-    def __init__(self):
+    def __init__(self, memory_manager):
         self.error_log = []
         self._lock = Lock()
         self.max_retries = ERROR_CONFIG['max_retries']
         self.retry_delay = ERROR_CONFIG['retry_delay']
         self.memory_manager = memory_manager
-        self.error_log = []
 
     def handle_error(self, error: Exception, context: str) -> dict:
             error_info = {
@@ -465,10 +463,10 @@ class MetricsCollector:
 class FileProcessor:
     """Handle file validation and processing operations."""
     
-    def __init__(self, supported_formats: List[str]):
+    def __init__(self, supported_formats: List[str], hardware_ctx):
         self.supported_formats = supported_formats
-        self.core = CoreUtilities()
-        self.error_handler = ErrorHandler()
+        self.core = CoreUtilities(hardware_ctx)
+        self.error_handler = ErrorHandler(self.core.memory_manager)
 
     def validate_file(self, file_path: str) -> bool:
         """Validate a file's existence and format."""

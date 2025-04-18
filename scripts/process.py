@@ -122,8 +122,9 @@ class SceneProcessor:
 class VideoProcessor:
     """Optimized video processing engine."""
     def __init__(self, settings=None, analyzer=None, hardware_ctx):
-        self.core = CoreUtilities()
+        self.cancel_flag = Event()
         self.settings = settings or load_settings()
+        self.core = CoreUtilities()
         self.config = PROCESSING_CONFIG
         self.audio_config = AUDIO_CONFIG
         self.speed_config = SPEED_CONFIG
@@ -132,16 +133,20 @@ class VideoProcessor:
         
         self.analyzer = analyzer  # Use provided analyzer
         self.audio_processor = AudioProcessor()
-        self.memory_manager = memory_manager
+        self.memory_manager = MemoryManager(hardware_ctx)  # Add this line
         self.progress = ProgressMonitor()
         self.error_handler = ErrorHandler()
         self.metrics = MetricsCollector()
-        self.scene_processor = SceneProcessor(self.config, self.audio_processor)
+        self.sample_rate = self.audio_config.get('sample_rate', 44100)
+        self.scene_processor = SceneProcessor(self.config, self.audio_processor, self.hardware_ctx, self.sample_rate)
         self.hardware_ctx = hardware_ctx
         self.kernel = None
         self._lock = Lock()
         if self.hardware_ctx.get('use_opencl', False):
             self._setup_opencl()
+
+    def cancel_processing(self) -> None:
+        self.cancel_flag.set()
 
     @profile  # Memory profiling decorator
     def process_video(self, input_path, output_path, scenes, target_duration):
@@ -222,6 +227,8 @@ class VideoProcessor:
 
     def _setup_opencl(self):
         """Set up OpenCL kernel for frame differencing optimized for RX470."""
+        if not self.hardware_ctx.get('use_opencl', False) or not self.hardware_ctx.get('context'):
+            return
         context = self.hardware_ctx['context']
         queue = cl.CommandQueue(context)
         program = cl.Program(context, """

@@ -80,6 +80,11 @@ SPEED_CONFIG = {
     'static_speed': 4.0
 }
 
+ERROR_CONFIG = {
+    'max_retries': 3,  # Number of retry attempts for operations
+    'retry_delay': 5   # Delay in seconds between retries
+}
+
 # Classes...
 class ConfigManager:
     _configs = {
@@ -124,10 +129,8 @@ class ConfigManager:
             with open(config_path, 'r') as f:
                 user_config = json.load(f)
             for category, settings in user_config.items():
-                if category == 'hardware':
+                if category in cls._configs:
                     cls._configs[category].update(settings)
-                else:
-                    cls.update(category, settings)
         except FileNotFoundError:
             print("No persistent config found, using defaults")
 

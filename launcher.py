@@ -23,8 +23,8 @@ print("..Imports Initialized.")
 # Classes
 class MovieCompact:
     def __init__(self):
-        self.core = CoreUtilities()
-        self.hardware_ctx = HardwareManager.create_context()  # NEW CONTEXT
+        self.hardware_ctx = HardwareManager.create_context()
+        self.core = CoreUtilities(self.hardware_ctx)
         self._init_configurations()
         self._validate_environment()
         self._init_components()
